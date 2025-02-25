@@ -115,7 +115,7 @@ fn getMimeType(path: []const u8) []const u8 {
 // String utilities
 fn endsWith(str: []const u8, suffix: []const u8) bool {
     if (str.len < suffix.len) return false;
-    return eql(str[str.len - suffix.len..], suffix);
+    return eql(str[str.len - suffix.len ..], suffix);
 }
 
 fn eql(a: []const u8, b: []const u8) bool {
@@ -213,7 +213,7 @@ pub fn serve(port: u16, directory: []const u8) !void {
     print("\nServing directory: ");
     print(directory);
     print("\nPress Ctrl+C to stop\n");
-    
+
     // Debug: Print current working directory
     var cwd_buf: [260]u8 = undefined;
     const cwd_len = GetCurrentDirectoryA(cwd_buf.len, &cwd_buf);
@@ -271,7 +271,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     var buffer: [4096]u8 = undefined;
     const bytes_received = recv(client_socket, &buffer, buffer.len, 0);
-    
+
     if (bytes_received <= 0) {
         return;
     }
@@ -302,9 +302,9 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         path_buf[path_len] = c;
         path_len += 1;
     }
-    
+
     // Add trailing backslash if needed
-    if (path_len > 0 && path_buf[path_len - 1] != '\\' && path_buf[path_len - 1] != '/') {
+    if (path_len > 0 and path_buf[path_len - 1] != '\\' and path_buf[path_len - 1] != '/') {
         path_buf[path_len] = '\\';
         path_len += 1;
     }
@@ -314,7 +314,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     if (req_path.len > 0 and req_path[0] == '/') {
         req_path = req_path[1..];
     }
-    
+
     debugPrint("Request path (normalized)", req_path);
 
     // If path is empty, serve index.html
@@ -340,7 +340,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     // Null terminate for Windows API
     path_buf[path_len] = 0;
-    
+
     // Debug: Print full file path
     debugPrint("Full file path", path_buf[0..path_len]);
 
@@ -354,15 +354,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     }
 
     // Open the file
-    const file_handle = CreateFileA(
-        @ptrCast(&path_buf),
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        null,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        null
-    );
+    const file_handle = CreateFileA(@ptrCast(&path_buf), GENERIC_READ, FILE_SHARE_READ, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, null);
 
     if (file_handle == INVALID_HANDLE_VALUE) {
         const error_code = GetLastError();
@@ -371,7 +363,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         return;
     }
     defer _ = CloseHandle(file_handle);
-    
+
     debugPrint("File opened successfully", "");
 
     // Get file size
@@ -405,8 +397,10 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         header_buf[header_len] = c;
         header_len += 1;
     }
-    header_buf[header_len] = '\r'; header_len += 1;
-    header_buf[header_len] = '\n'; header_len += 1;
+    header_buf[header_len] = '\r';
+    header_len += 1;
+    header_buf[header_len] = '\n';
+    header_len += 1;
 
     // Content-Length
     const content_length = "Content-Length: ";
@@ -414,12 +408,12 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         header_buf[header_len] = c;
         header_len += 1;
     }
-    
+
     // Convert file size to string
     var size_buf: [20]u8 = undefined;
     var size_len: usize = 0;
     var size_val = file_size;
-    
+
     if (size_val == 0) {
         size_buf[0] = '0';
         size_len = 1;
@@ -429,7 +423,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             size_val /= 10;
             size_len += 1;
         }
-        
+
         // Reverse the digits
         var j: usize = 0;
         var k: usize = size_len - 1;
@@ -441,30 +435,34 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             k -= 1;
         }
     }
-    
+
     for (size_buf[0..size_len]) |c| {
         header_buf[header_len] = c;
         header_len += 1;
     }
-    
-    header_buf[header_len] = '\r'; header_len += 1;
-    header_buf[header_len] = '\n'; header_len += 1;
-    
+
+    header_buf[header_len] = '\r';
+    header_len += 1;
+    header_buf[header_len] = '\n';
+    header_len += 1;
+
     // End of headers
-    header_buf[header_len] = '\r'; header_len += 1;
-    header_buf[header_len] = '\n'; header_len += 1;
-    
+    header_buf[header_len] = '\r';
+    header_len += 1;
+    header_buf[header_len] = '\n';
+    header_len += 1;
+
     // Send headers
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
-    
+
     // Send file content
     var read_buf: [8192]u8 = undefined;
     var bytes_read: u32 = 0;
-    
+
     while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
         _ = send(client_socket, &read_buf, @intCast(bytes_read), 0);
     }
-    
+
     // Close the connection
     _ = shutdown(client_socket, SD_SEND);
 }
@@ -472,19 +470,19 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []const u8) void {
     var response_buf: [1024]u8 = undefined;
     var response_len: usize = 0;
-    
+
     // HTTP status line
     const http_ver = "HTTP/1.1 ";
     for (http_ver) |c| {
         response_buf[response_len] = c;
         response_len += 1;
     }
-    
+
     // Status code
     var code_buf: [8]u8 = undefined;
     var code_len: usize = 0;
     var code_val = status_code;
-    
+
     if (code_val == 0) {
         code_buf[0] = '0';
         code_len = 1;
@@ -494,7 +492,7 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
             code_val /= 10;
             code_len += 1;
         }
-        
+
         // Reverse the digits
         var j: usize = 0;
         var k: usize = code_len - 1;
@@ -506,69 +504,73 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
             k -= 1;
         }
     }
-    
+
     for (code_buf[0..code_len]) |c| {
         response_buf[response_len] = c;
         response_len += 1;
     }
-    
-    response_buf[response_len] = ' '; response_len += 1;
-    
+
+    response_buf[response_len] = ' ';
+    response_len += 1;
+
     // Status text
     for (status_text) |c| {
         response_buf[response_len] = c;
         response_len += 1;
     }
-    
-    response_buf[response_len] = '\r'; response_len += 1;
-    response_buf[response_len] = '\n'; response_len += 1;
-    
+
+    response_buf[response_len] = '\r';
+    response_len += 1;
+    response_buf[response_len] = '\n';
+    response_len += 1;
+
     // Headers
     const content_type = "Content-Type: text/html\r\n";
     for (content_type) |c| {
         response_buf[response_len] = c;
         response_len += 1;
     }
-    
+
     // Create error message
     var body_buf: [256]u8 = undefined;
     var body_len: usize = 0;
-    
+
     const html_start = "<html><body><h1>";
     for (html_start) |c| {
         body_buf[body_len] = c;
         body_len += 1;
     }
-    
+
     for (code_buf[0..code_len]) |c| {
         body_buf[body_len] = c;
         body_len += 1;
     }
-    
-    body_buf[body_len] = ' '; body_len += 1;
-    
+
+    body_buf[body_len] = ' ';
+    body_len += 1;
+
     for (status_text) |c| {
         body_buf[body_len] = c;
         body_len += 1;
     }
-    
+
     const html_end = "</h1></body></html>";
     for (html_end) |c| {
         body_buf[body_len] = c;
         body_len += 1;
     }
-    
+
     // Content length
     const content_length = "Content-Length: ";
     for (content_length) |c| {
         response_buf[response_len] = c;
         response_len += 1;
     }
-    
+
     var size_buf: [8]u8 = undefined;
     var size_len: usize = 0;
     var size_val = body_len;
-    
+
     if (size_val == 0) {
         size_buf[0] = '0';
         size_len = 1;
@@ -578,7 +580,7 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
             size_val /= 10;
             size_len += 1;
         }
-        
+
         // Reverse the digits
         var j: usize = 0;
         var k: usize = size_len - 1;
@@ -590,22 +592,26 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
             k -= 1;
         }
     }
-    
+
     for (size_buf[0..size_len]) |c| {
         response_buf[response_len] = c;
         response_len += 1;
     }
-    
-    response_buf[response_len] = '\r'; response_len += 1;
-    response_buf[response_len] = '\n'; response_len += 1;
-    
+
+    response_buf[response_len] = '\r';
+    response_len += 1;
+    response_buf[response_len] = '\n';
+    response_len += 1;
+
     // End of headers
-    response_buf[response_len] = '\r'; response_len += 1;
-    response_buf[response_len] = '\n'; response_len += 1;
-    
+    response_buf[response_len] = '\r';
+    response_len += 1;
+    response_buf[response_len] = '\n';
+    response_len += 1;
+
     // Send headers
     _ = send(client_socket, &response_buf, @intCast(response_len), 0);
-    
+
     // Send body
     _ = send(client_socket, &body_buf, @intCast(body_len), 0);
 }
@@ -615,7 +621,7 @@ fn intToStr(value: u32) []u8 {
     var buffer: [20]u8 = undefined;
     var i: usize = 0;
     var val = value;
-    
+
     if (val == 0) {
         buffer[0] = '0';
         i = 1;
@@ -625,7 +631,7 @@ fn intToStr(value: u32) []u8 {
             val /= 10;
             i += 1;
         }
-        
+
         // Reverse the digits
         var j: usize = 0;
         var k: usize = i - 1;
@@ -637,7 +643,7 @@ fn intToStr(value: u32) []u8 {
             k -= 1;
         }
     }
-    
+
     return buffer[0..i];
 }
 
