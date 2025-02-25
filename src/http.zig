@@ -162,6 +162,14 @@ fn print(message: []const u8) void {
     _ = WriteConsoleA(stdout, message.ptr, @intCast(message.len), &written, null);
 }
 
+// Debug function to print file paths
+fn debugPrint(prefix: []const u8, message: []const u8) void {
+    print(prefix);
+    print(": ");
+    print(message);
+    print("\n");
+}
+
 // Main server function
 pub fn serve(port: u16, directory: []const u8) !void {
     // Initialize Winsock
@@ -205,6 +213,15 @@ pub fn serve(port: u16, directory: []const u8) !void {
     print("\nServing directory: ");
     print(directory);
     print("\nPress Ctrl+C to stop\n");
+    
+    // Debug: Print current working directory
+    var cwd_buf: [260]u8 = undefined;
+    const cwd_len = GetCurrentDirectoryA(cwd_buf.len, &cwd_buf);
+    if (cwd_len > 0) {
+        print("Current working directory: ");
+        print(cwd_buf[0..cwd_len]);
+        print("\n");
+    }
 
     // Accept and handle connections
     while (true) {
@@ -264,6 +281,11 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         return;
     };
 
+    // Debug: Print request details
+    debugPrint("Request method", request.method);
+    debugPrint("Request path", request.path);
+    debugPrint("Request version", request.version);
+
     // Only handle GET requests
     if (!eql(request.method, "GET")) {
         sendErrorResponse(client_socket, 405, "Method Not Allowed");
@@ -275,8 +297,15 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     var path_len: usize = 0;
 
     // Start with the directory
+    debugPrint("Directory parameter", directory);
     for (directory) |c| {
         path_buf[path_len] = c;
+        path_len += 1;
+    }
+    
+    // Add trailing backslash if needed
+    if (path_len > 0 && path_buf[path_len - 1] != '\\' && path_buf[path_len - 1] != '/') {
+        path_buf[path_len] = '\\';
         path_len += 1;
     }
 
@@ -285,10 +314,13 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     if (req_path.len > 0 and req_path[0] == '/') {
         req_path = req_path[1..];
     }
+    
+    debugPrint("Request path (normalized)", req_path);
 
     // If path is empty, serve index.html
     if (req_path.len == 0) {
         const index = "index.html";
+        debugPrint("Using default file", index);
         for (index) |c| {
             path_buf[path_len] = c;
             path_len += 1;
@@ -308,6 +340,18 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     // Null terminate for Windows API
     path_buf[path_len] = 0;
+    
+    // Debug: Print full file path
+    debugPrint("Full file path", path_buf[0..path_len]);
+
+    // Check if file exists before trying to open it
+    const file_attrs = GetFileAttributesA(@ptrCast(&path_buf));
+    if (file_attrs == 0xFFFFFFFF) { // INVALID_FILE_ATTRIBUTES
+        const error_code = GetLastError();
+        debugPrint("File not found, error code", intToStr(error_code));
+        sendErrorResponse(client_socket, 404, "Not Found");
+        return;
+    }
 
     // Open the file
     const file_handle = CreateFileA(
@@ -321,10 +365,14 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     );
 
     if (file_handle == INVALID_HANDLE_VALUE) {
+        const error_code = GetLastError();
+        debugPrint("Failed to open file, error code", intToStr(error_code));
         sendErrorResponse(client_socket, 404, "Not Found");
         return;
     }
     defer _ = CloseHandle(file_handle);
+    
+    debugPrint("File opened successfully", "");
 
     // Get file size
     const file_size = GetFileSize(file_handle, null);
@@ -561,3 +609,38 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
     // Send body
     _ = send(client_socket, &body_buf, @intCast(body_len), 0);
 }
+
+// Helper function to convert integer to string for debugging
+fn intToStr(value: u32) []u8 {
+    var buffer: [20]u8 = undefined;
+    var i: usize = 0;
+    var val = value;
+    
+    if (val == 0) {
+        buffer[0] = '0';
+        i = 1;
+    } else {
+        while (val > 0) {
+            buffer[i] = @intCast('0' + (val % 10));
+            val /= 10;
+            i += 1;
+        }
+        
+        // Reverse the digits
+        var j: usize = 0;
+        var k: usize = i - 1;
+        while (j < k) {
+            const temp = buffer[j];
+            buffer[j] = buffer[k];
+            buffer[k] = temp;
+            j += 1;
+            k -= 1;
+        }
+    }
+    
+    return buffer[0..i];
+}
+
+// Add GetCurrentDirectoryA function declaration
+extern "kernel32" fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: [*]u8) callconv(.C) u32;
+extern "kernel32" fn GetFileAttributesA(lpFileName: [*:0]const u8) callconv(.C) u32;
