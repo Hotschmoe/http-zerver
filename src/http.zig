@@ -15,7 +15,7 @@ const GENERIC_READ = 0x80000000;
 const FILE_SHARE_READ = 0x00000001;
 const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x80;
-const INVALID_HANDLE_VALUE = @bitCast(@as(usize, 0xFFFFFFFFFFFFFFFF));
+const INVALID_HANDLE_VALUE = @as(usize, 0xFFFFFFFFFFFFFFFF);
 
 // Socket address structure
 const sockaddr_in = extern struct {
@@ -26,17 +26,17 @@ const sockaddr_in = extern struct {
 };
 
 // Windows API functions
-extern "ws2_32" fn WSAStartup(wVersionRequested: u16, lpWSAData: *WSAData) callconv(.Stdcall) i32;
-extern "ws2_32" fn WSACleanup() callconv(.Stdcall) i32;
-extern "ws2_32" fn socket(af: i32, type: i32, protocol: i32) callconv(.Stdcall) usize;
-extern "ws2_32" fn bind(s: usize, name: *const sockaddr_in, namelen: i32) callconv(.Stdcall) i32;
-extern "ws2_32" fn listen(s: usize, backlog: i32) callconv(.Stdcall) i32;
-extern "ws2_32" fn accept(s: usize, addr: ?*sockaddr_in, addrlen: ?*i32) callconv(.Stdcall) usize;
-extern "ws2_32" fn closesocket(s: usize) callconv(.Stdcall) i32;
-extern "ws2_32" fn recv(s: usize, buf: [*]u8, len: i32, flags: i32) callconv(.Stdcall) i32;
-extern "ws2_32" fn send(s: usize, buf: [*]const u8, len: i32, flags: i32) callconv(.Stdcall) i32;
-extern "ws2_32" fn shutdown(s: usize, how: i32) callconv(.Stdcall) i32;
-extern "ws2_32" fn htons(hostshort: u16) callconv(.Stdcall) u16;
+extern "ws2_32" fn WSAStartup(wVersionRequested: u16, lpWSAData: *WSAData) callconv(.C) i32;
+extern "ws2_32" fn WSACleanup() callconv(.C) i32;
+extern "ws2_32" fn socket(af: i32, type: i32, protocol: i32) callconv(.C) usize;
+extern "ws2_32" fn bind(s: usize, name: *const sockaddr_in, namelen: i32) callconv(.C) i32;
+extern "ws2_32" fn listen(s: usize, backlog: i32) callconv(.C) i32;
+extern "ws2_32" fn accept(s: usize, addr: ?*sockaddr_in, addrlen: ?*i32) callconv(.C) usize;
+extern "ws2_32" fn closesocket(s: usize) callconv(.C) i32;
+extern "ws2_32" fn recv(s: usize, buf: [*]u8, len: i32, flags: i32) callconv(.C) i32;
+extern "ws2_32" fn send(s: usize, buf: [*]const u8, len: i32, flags: i32) callconv(.C) i32;
+extern "ws2_32" fn shutdown(s: usize, how: i32) callconv(.C) i32;
+extern "ws2_32" fn htons(hostshort: u16) callconv(.C) u16;
 
 // File I/O functions
 extern "kernel32" fn CreateFileA(
@@ -47,27 +47,27 @@ extern "kernel32" fn CreateFileA(
     dwCreationDisposition: u32,
     dwFlagsAndAttributes: u32,
     hTemplateFile: ?*anyopaque,
-) callconv(.Stdcall) usize;
+) callconv(.C) usize;
 extern "kernel32" fn ReadFile(
     hFile: usize,
     lpBuffer: [*]u8,
     nNumberOfBytesToRead: u32,
     lpNumberOfBytesRead: *u32,
     lpOverlapped: ?*anyopaque,
-) callconv(.Stdcall) i32;
-extern "kernel32" fn CloseHandle(hObject: usize) callconv(.Stdcall) i32;
-extern "kernel32" fn GetFileSize(hFile: usize, lpFileSizeHigh: ?*u32) callconv(.Stdcall) u32;
-extern "kernel32" fn GetLastError() callconv(.Stdcall) u32;
+) callconv(.C) i32;
+extern "kernel32" fn CloseHandle(hObject: usize) callconv(.C) i32;
+extern "kernel32" fn GetFileSize(hFile: usize, lpFileSizeHigh: ?*u32) callconv(.C) u32;
+extern "kernel32" fn GetLastError() callconv(.C) u32;
 
 // Console output
-extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.Stdcall) usize;
+extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.C) usize;
 extern "kernel32" fn WriteConsoleA(
     hConsoleOutput: usize,
     lpBuffer: [*]const u8,
     nNumberOfCharsToWrite: u32,
     lpNumberOfCharsWritten: *u32,
     lpReserved: ?*anyopaque,
-) callconv(.Stdcall) i32;
+) callconv(.C) i32;
 
 // WSA data structure
 const WSAData = extern struct {
@@ -138,12 +138,12 @@ fn parseRequest(buffer: []const u8) !HttpRequest {
     while (method_end < buffer.len and buffer[method_end] != ' ') : (method_end += 1) {}
     if (method_end >= buffer.len) return error.InvalidRequest;
 
-    var path_start = method_end + 1;
+    const path_start = method_end + 1;
     var path_end = path_start;
     while (path_end < buffer.len and buffer[path_end] != ' ') : (path_end += 1) {}
     if (path_end >= buffer.len) return error.InvalidRequest;
 
-    var version_start = path_end + 1;
+    const version_start = path_end + 1;
     var version_end = version_start;
     while (version_end < buffer.len and buffer[version_end] != '\r') : (version_end += 1) {}
     if (version_end >= buffer.len) return error.InvalidRequest;
@@ -311,7 +311,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     // Open the file
     const file_handle = CreateFileA(
-        &path_buf,
+        @ptrCast(&path_buf),
         GENERIC_READ,
         FILE_SHARE_READ,
         null,

@@ -4,15 +4,15 @@
 const http = @import("http.zig");
 
 // External functions for command-line arguments
-extern "kernel32" fn GetCommandLineA() callconv(.Stdcall) [*:0]const u8;
-extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.Stdcall) usize;
+extern "kernel32" fn GetCommandLineA() callconv(.C) [*:0]const u8;
+extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.C) usize;
 extern "kernel32" fn WriteConsoleA(
     hConsoleOutput: usize,
     lpBuffer: [*]const u8,
     nNumberOfCharsToWrite: u32,
     lpNumberOfCharsWritten: *u32,
     lpReserved: ?*anyopaque,
-) callconv(.Stdcall) i32;
+) callconv(.C) i32;
 
 // Print to console
 fn print(message: []const u8) void {
@@ -38,7 +38,7 @@ fn parseArgs() struct { port: u16, directory: []const u8 } {
     
     // Parse port if provided
     if (cmd[i] != 0) {
-        var port_start = i;
+        const port_start = i;
         while (cmd[i] != 0 and cmd[i] != ' ') : (i += 1) {}
         
         if (i > port_start) {
@@ -50,7 +50,7 @@ fn parseArgs() struct { port: u16, directory: []const u8 } {
         
         // Parse directory if provided
         if (cmd[i] != 0) {
-            var dir_start = i;
+            const dir_start = i;
             while (cmd[i] != 0) : (i += 1) {}
             
             if (i > dir_start) {
