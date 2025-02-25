@@ -81,7 +81,7 @@
 ### Content-Length for Error Responses
 - Add the `Content-Length` header to error responses for greater HTTP compliance
 
-### Connection: close
+### Connection: close // i think we got this working 2025-02-25
 - Set `Connection: close` header
 - Close connection after request served
 
