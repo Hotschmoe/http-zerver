@@ -1,6 +1,9 @@
 // http-zerver: A minimal HTTP server for Windows without std
 // Serves static files from a local directory
 
+// Global configuration
+var verbose_logging: bool = false;
+
 // Windows API constants and types
 const INVALID_SOCKET = 0xFFFFFFFFFFFFFFFF;
 const SOCKET_ERROR = -1;
@@ -164,14 +167,19 @@ fn print(message: []const u8) void {
 
 // Debug function to print file paths
 fn debugPrint(prefix: []const u8, message: []const u8) void {
-    print(prefix);
-    print(": ");
-    print(message);
-    print("\n");
+    if (verbose_logging) {
+        print(prefix);
+        print(": ");
+        print(message);
+        print("\n");
+    }
 }
 
 // Main server function
-pub fn serve(port: u16, directory: []const u8) !void {
+pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
+    // Set global verbose flag
+    verbose_logging = verbose;
+
     // Initialize Winsock
     var wsa_data: WSAData = undefined;
     const result = WSAStartup(0x0202, &wsa_data); // Version 2.2
@@ -351,6 +359,234 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         debugPrint("File not found, error code", intToStr(error_code));
         sendErrorResponse(client_socket, 404, "Not Found");
         return;
+    }
+
+    // Check if it's a directory
+    if ((file_attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        debugPrint("Path is a directory", path_buf[0..path_len]);
+
+        // Check if the request path ends with a slash
+        const should_redirect = req_path.len > 0 and req_path[req_path.len - 1] != '/';
+
+        if (should_redirect) {
+            // Redirect to add trailing slash
+            print("Redirecting to add trailing slash\n");
+
+            var redirect_buf: [1024]u8 = undefined;
+            var redirect_len: usize = 0;
+
+            // HTTP/1.1 301 Moved Permanently
+            const status = "HTTP/1.1 301 Moved Permanently\r\n";
+            for (status) |c| {
+                redirect_buf[redirect_len] = c;
+                redirect_len += 1;
+            }
+
+            // Location header
+            const location = "Location: ";
+            for (location) |c| {
+                redirect_buf[redirect_len] = c;
+                redirect_len += 1;
+            }
+
+            // Add the request path
+            for (request.path) |c| {
+                redirect_buf[redirect_len] = c;
+                redirect_len += 1;
+            }
+
+            // Add trailing slash
+            redirect_buf[redirect_len] = '/';
+            redirect_len += 1;
+
+            // End of header
+            redirect_buf[redirect_len] = '\r';
+            redirect_len += 1;
+            redirect_buf[redirect_len] = '\n';
+            redirect_len += 1;
+
+            // Content-Length: 0
+            const content_length = "Content-Length: 0\r\n";
+            for (content_length) |c| {
+                redirect_buf[redirect_len] = c;
+                redirect_len += 1;
+            }
+
+            // Connection: close
+            const connection_close = "Connection: close\r\n";
+            for (connection_close) |c| {
+                redirect_buf[redirect_len] = c;
+                redirect_len += 1;
+            }
+
+            // End of headers
+            redirect_buf[redirect_len] = '\r';
+            redirect_len += 1;
+            redirect_buf[redirect_len] = '\n';
+            redirect_len += 1;
+
+            // Send redirect
+            _ = send(client_socket, &redirect_buf, @intCast(redirect_len), 0);
+            _ = shutdown(client_socket, SD_SEND);
+            return;
+        }
+
+        // Look for index.html in the directory
+        var index_path_buf: [512]u8 = undefined;
+        var index_path_len: usize = 0;
+
+        for (path_buf[0..path_len]) |c| {
+            index_path_buf[index_path_len] = c;
+            index_path_len += 1;
+        }
+
+        // Remove null terminator if present
+        if (index_path_len > 0 and index_path_buf[index_path_len - 1] == 0) {
+            index_path_len -= 1;
+        }
+
+        // Add index.html
+        const index_file = "\\index.html";
+        for (index_file) |c| {
+            index_path_buf[index_path_len] = c;
+            index_path_len += 1;
+        }
+
+        // Null terminate
+        index_path_buf[index_path_len] = 0;
+
+        // Check if index.html exists
+        const index_attrs = GetFileAttributesA(@ptrCast(&index_path_buf));
+        if (index_attrs != 0xFFFFFFFF and (index_attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            // Index file exists, serve it
+            debugPrint("Serving index file", index_path_buf[0..index_path_len]);
+
+            // Open the index file
+            const file_handle = CreateFileA(@ptrCast(&index_path_buf), GENERIC_READ, FILE_SHARE_READ, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, null);
+
+            if (file_handle == INVALID_HANDLE_VALUE) {
+                const error_code = GetLastError();
+                debugPrint("Failed to open index file, error code", intToStr(error_code));
+                sendErrorResponse(client_socket, 500, "Internal Server Error");
+                return;
+            }
+            defer _ = CloseHandle(file_handle);
+
+            // Get file size
+            const file_size = GetFileSize(file_handle, null);
+            if (file_size == 0xFFFFFFFF) { // INVALID_FILE_SIZE
+                sendErrorResponse(client_socket, 500, "Internal Server Error");
+                return;
+            }
+
+            // Determine MIME type
+            const mime_type = getMimeType("index.html");
+
+            // Send HTTP headers
+            var header_buf: [1024]u8 = undefined;
+            var header_len: usize = 0;
+
+            // HTTP/1.1 200 OK
+            const status = "HTTP/1.1 200 OK\r\n";
+            for (status) |c| {
+                header_buf[header_len] = c;
+                header_len += 1;
+            }
+
+            // Content-Type
+            const content_type = "Content-Type: ";
+            for (content_type) |c| {
+                header_buf[header_len] = c;
+                header_len += 1;
+            }
+            for (mime_type) |c| {
+                header_buf[header_len] = c;
+                header_len += 1;
+            }
+            header_buf[header_len] = '\r';
+            header_len += 1;
+            header_buf[header_len] = '\n';
+            header_len += 1;
+
+            // Content-Length
+            const content_length = "Content-Length: ";
+            for (content_length) |c| {
+                header_buf[header_len] = c;
+                header_len += 1;
+            }
+
+            // Convert file size to string
+            var size_buf: [20]u8 = undefined;
+            var size_len: usize = 0;
+            var size_val = file_size;
+
+            if (size_val == 0) {
+                size_buf[0] = '0';
+                size_len = 1;
+            } else {
+                while (size_val > 0) {
+                    size_buf[size_len] = @intCast('0' + (size_val % 10));
+                    size_val /= 10;
+                    size_len += 1;
+                }
+
+                // Reverse the digits
+                var j: usize = 0;
+                var k: usize = size_len - 1;
+                while (j < k) {
+                    const temp = size_buf[j];
+                    size_buf[j] = size_buf[k];
+                    size_buf[k] = temp;
+                    j += 1;
+                    k -= 1;
+                }
+            }
+
+            for (size_buf[0..size_len]) |c| {
+                header_buf[header_len] = c;
+                header_len += 1;
+            }
+
+            header_buf[header_len] = '\r';
+            header_len += 1;
+            header_buf[header_len] = '\n';
+            header_len += 1;
+
+            // Connection: close header
+            const connection_close = "Connection: close\r\n";
+            for (connection_close) |c| {
+                header_buf[header_len] = c;
+                header_len += 1;
+            }
+
+            // End of headers
+            header_buf[header_len] = '\r';
+            header_len += 1;
+            header_buf[header_len] = '\n';
+            header_len += 1;
+
+            // Send headers
+            debugPrint("Sending HTTP headers for index file", header_buf[0..header_len]);
+            _ = send(client_socket, &header_buf, @intCast(header_len), 0);
+
+            // Send file content
+            var read_buf: [8192]u8 = undefined;
+            var bytes_read: u32 = 0;
+
+            while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
+                debugPrint("Sending index file content bytes", intToStr(bytes_read));
+                _ = send(client_socket, &read_buf, @intCast(bytes_read), 0);
+            }
+
+            // Close the connection
+            debugPrint("Closing connection after serving index file", "");
+            _ = shutdown(client_socket, SD_SEND);
+            return;
+        } else {
+            // No index file, generate directory listing
+            listDirectory(client_socket, path_buf[0..path_len], request.path);
+            return;
+        }
     }
 
     // Open the file
@@ -675,3 +911,325 @@ fn intToStr(value: u32) []u8 {
 // Add GetCurrentDirectoryA function declaration
 extern "kernel32" fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: [*]u8) callconv(.C) u32;
 extern "kernel32" fn GetFileAttributesA(lpFileName: [*:0]const u8) callconv(.C) u32;
+
+// Directory listing functions
+extern "kernel32" fn FindFirstFileA(lpFileName: [*:0]const u8, lpFindFileData: *WIN32_FIND_DATA) callconv(.C) usize;
+extern "kernel32" fn FindNextFileA(hFindFile: usize, lpFindFileData: *WIN32_FIND_DATA) callconv(.C) i32;
+extern "kernel32" fn FindClose(hFindFile: usize) callconv(.C) i32;
+
+// File attribute constants
+const FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+
+// WIN32_FIND_DATA structure
+const WIN32_FIND_DATA = extern struct {
+    dwFileAttributes: u32,
+    ftCreationTime: FILETIME,
+    ftLastAccessTime: FILETIME,
+    ftLastWriteTime: FILETIME,
+    nFileSizeHigh: u32,
+    nFileSizeLow: u32,
+    dwReserved0: u32,
+    dwReserved1: u32,
+    cFileName: [260]u8,
+    cAlternateFileName: [14]u8,
+};
+
+const FILETIME = extern struct {
+    dwLowDateTime: u32,
+    dwHighDateTime: u32,
+};
+
+// List directory contents and generate HTML
+fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u8) void {
+    print("Listing directory: ");
+    print(path);
+    print("\n");
+
+    // Create search pattern (path\*)
+    var search_pattern: [512]u8 = undefined;
+    var pattern_len: usize = 0;
+
+    for (path) |c| {
+        search_pattern[pattern_len] = c;
+        pattern_len += 1;
+    }
+
+    // Add wildcard
+    search_pattern[pattern_len] = '\\';
+    pattern_len += 1;
+    search_pattern[pattern_len] = '*';
+    pattern_len += 1;
+    search_pattern[pattern_len] = 0; // Null terminate
+
+    // Find first file
+    var find_data: WIN32_FIND_DATA = undefined;
+    const find_handle = FindFirstFileA(@ptrCast(&search_pattern), &find_data);
+
+    if (find_handle == INVALID_HANDLE_VALUE) {
+        sendErrorResponse(client_socket, 500, "Error listing directory");
+        return;
+    }
+    defer _ = FindClose(find_handle);
+
+    // Start building HTML response
+    var html_buf: [8192]u8 = undefined;
+    var html_len: usize = 0;
+
+    // HTML header
+    const html_header =
+        "<!DOCTYPE HTML>\n" ++
+        "<html lang=\"en\">\n" ++
+        "<head>\n" ++
+        "    <meta charset=\"utf-8\">\n" ++
+        "    <title>Directory listing for ";
+
+    for (html_header) |c| {
+        html_buf[html_len] = c;
+        html_len += 1;
+    }
+
+    // Add the request path to the title
+    for (request_path) |c| {
+        html_buf[html_len] = c;
+        html_len += 1;
+    }
+
+    // Continue with HTML
+    const html_header2 =
+        "</title>\n" ++
+        "    <style>\n" ++
+        "        body { font-family: Arial, sans-serif; margin: 20px; }\n" ++
+        "        h1 { border-bottom: 1px solid #ccc; padding-bottom: 10px; }\n" ++
+        "        ul { list-style-type: none; padding: 0; }\n" ++
+        "        li { margin: 5px 0; }\n" ++
+        "        a { text-decoration: none; color: #0366d6; }\n" ++
+        "        a:hover { text-decoration: underline; }\n" ++
+        "    </style>\n" ++
+        "</head>\n" ++
+        "<body>\n" ++
+        "    <h1>Directory listing for ";
+
+    for (html_header2) |c| {
+        html_buf[html_len] = c;
+        html_len += 1;
+    }
+
+    // Add the request path again
+    for (request_path) |c| {
+        html_buf[html_len] = c;
+        html_len += 1;
+    }
+
+    // Start the file list
+    const html_list_start =
+        "</h1>\n" ++
+        "    <hr>\n" ++
+        "    <ul>\n";
+
+    for (html_list_start) |c| {
+        html_buf[html_len] = c;
+        html_len += 1;
+    }
+
+    // Add parent directory link if not at root
+    if (request_path.len > 1) {
+        const parent_link = "        <li><a href=\"..\">..</a> (Parent Directory)</li>\n";
+        for (parent_link) |c| {
+            html_buf[html_len] = c;
+            html_len += 1;
+        }
+    }
+
+    // Process all files in the directory
+    var has_more_files = true;
+    while (has_more_files) {
+        // Get filename as a slice
+        var filename_len: usize = 0;
+        while (filename_len < find_data.cFileName.len and find_data.cFileName[filename_len] != 0) {
+            filename_len += 1;
+        }
+        const filename = find_data.cFileName[0..filename_len];
+
+        // Skip . and .. entries
+        if (!eql(filename, ".") and !eql(filename, "..")) {
+            // Start list item
+            html_buf[html_len] = ' ';
+            html_len += 1;
+            html_buf[html_len] = ' ';
+            html_len += 1;
+            html_buf[html_len] = ' ';
+            html_len += 1;
+            html_buf[html_len] = ' ';
+            html_len += 1;
+            html_buf[html_len] = ' ';
+            html_len += 1;
+            html_buf[html_len] = '<';
+            html_len += 1;
+            html_buf[html_len] = 'l';
+            html_len += 1;
+            html_buf[html_len] = 'i';
+            html_len += 1;
+            html_buf[html_len] = '>';
+            html_len += 1;
+            html_buf[html_len] = '<';
+            html_len += 1;
+            html_buf[html_len] = 'a';
+            html_len += 1;
+            html_buf[html_len] = ' ';
+            html_len += 1;
+            html_buf[html_len] = 'h';
+            html_len += 1;
+            html_buf[html_len] = 'r';
+            html_len += 1;
+            html_buf[html_len] = 'e';
+            html_len += 1;
+            html_buf[html_len] = 'f';
+            html_len += 1;
+            html_buf[html_len] = '=';
+            html_len += 1;
+            html_buf[html_len] = '"';
+            html_len += 1;
+
+            // Add the filename as the link
+            for (filename) |c| {
+                html_buf[html_len] = c;
+                html_len += 1;
+            }
+
+            // Add trailing slash for directories
+            if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                html_buf[html_len] = '/';
+                html_len += 1;
+            }
+
+            html_buf[html_len] = '"';
+            html_len += 1;
+            html_buf[html_len] = '>';
+            html_len += 1;
+
+            // Add the filename as the link text
+            for (filename) |c| {
+                html_buf[html_len] = c;
+                html_len += 1;
+            }
+
+            // Add indicators for directories
+            if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                html_buf[html_len] = '/';
+                html_len += 1;
+            }
+
+            // Close the link and list item
+            const item_end = "</a></li>\n";
+            for (item_end) |c| {
+                html_buf[html_len] = c;
+                html_len += 1;
+            }
+        }
+
+        // Find next file
+        if (FindNextFileA(find_handle, &find_data) == 0) {
+            has_more_files = false;
+        }
+    }
+
+    // Close the HTML
+    const html_footer =
+        "    </ul>\n" ++
+        "    <hr>\n" ++
+        "    <p>http-zerver</p>\n" ++
+        "</body>\n" ++
+        "</html>\n";
+
+    for (html_footer) |c| {
+        html_buf[html_len] = c;
+        html_len += 1;
+    }
+
+    // Send HTTP headers
+    var header_buf: [1024]u8 = undefined;
+    var header_len: usize = 0;
+
+    // HTTP/1.1 200 OK
+    const status = "HTTP/1.1 200 OK\r\n";
+    for (status) |c| {
+        header_buf[header_len] = c;
+        header_len += 1;
+    }
+
+    // Content-Type
+    const content_type = "Content-Type: text/html; charset=utf-8\r\n";
+    for (content_type) |c| {
+        header_buf[header_len] = c;
+        header_len += 1;
+    }
+
+    // Content-Length
+    const content_length = "Content-Length: ";
+    for (content_length) |c| {
+        header_buf[header_len] = c;
+        header_len += 1;
+    }
+
+    // Convert HTML length to string
+    var size_buf: [20]u8 = undefined;
+    var size_len: usize = 0;
+    var size_val = html_len;
+
+    if (size_val == 0) {
+        size_buf[0] = '0';
+        size_len = 1;
+    } else {
+        while (size_val > 0) {
+            size_buf[size_len] = @intCast('0' + (size_val % 10));
+            size_val /= 10;
+            size_len += 1;
+        }
+
+        // Reverse the digits
+        var j: usize = 0;
+        var k: usize = size_len - 1;
+        while (j < k) {
+            const temp = size_buf[j];
+            size_buf[j] = size_buf[k];
+            size_buf[k] = temp;
+            j += 1;
+            k -= 1;
+        }
+    }
+
+    for (size_buf[0..size_len]) |c| {
+        header_buf[header_len] = c;
+        header_len += 1;
+    }
+
+    header_buf[header_len] = '\r';
+    header_len += 1;
+    header_buf[header_len] = '\n';
+    header_len += 1;
+
+    // Connection: close header
+    const connection_close = "Connection: close\r\n";
+    for (connection_close) |c| {
+        header_buf[header_len] = c;
+        header_len += 1;
+    }
+
+    // End of headers
+    header_buf[header_len] = '\r';
+    header_len += 1;
+    header_buf[header_len] = '\n';
+    header_len += 1;
+
+    // Send headers
+    print("Sending directory listing headers\n");
+    _ = send(client_socket, &header_buf, @intCast(header_len), 0);
+
+    // Send HTML content
+    print("Sending directory listing HTML\n");
+    _ = send(client_socket, &html_buf, @intCast(html_len), 0);
+
+    // Close the connection
+    print("Closing connection after directory listing\n");
+    _ = shutdown(client_socket, SD_SEND);
+}

@@ -22,44 +22,53 @@ fn print(message: []const u8) void {
 }
 
 // Parse command line arguments
-fn parseArgs() struct { port: u16, directory: []const u8 } {
+fn parseArgs() struct { port: u16, directory: []const u8, verbose: bool } {
     const cmd = GetCommandLineA();
-    
+
     // Default values
     var port: u16 = 8000;
     var directory: []const u8 = ".";
-    
+    var verbose: bool = false;
+
     // Skip the program name
     var i: usize = 0;
     while (cmd[i] != 0 and (cmd[i] != ' ' or inQuotes(cmd, i))) : (i += 1) {}
-    
-    // Skip whitespace
-    while (cmd[i] != 0 and cmd[i] == ' ') : (i += 1) {}
-    
-    // Parse port if provided
-    if (cmd[i] != 0) {
-        const port_start = i;
-        while (cmd[i] != 0 and cmd[i] != ' ') : (i += 1) {}
-        
-        if (i > port_start) {
-            port = parsePort(cmd[port_start..i]);
-        }
-        
+
+    // Parse arguments
+    while (cmd[i] != 0) {
         // Skip whitespace
         while (cmd[i] != 0 and cmd[i] == ' ') : (i += 1) {}
-        
-        // Parse directory if provided
-        if (cmd[i] != 0) {
-            const dir_start = i;
-            while (cmd[i] != 0) : (i += 1) {}
-            
-            if (i > dir_start) {
-                directory = cmd[dir_start..i];
+        if (cmd[i] == 0) break;
+
+        // Check for flags
+        if (cmd[i] == '-') {
+            i += 1;
+            if (startsWith(cmd[i..], "v") or startsWith(cmd[i..], "verbose")) {
+                verbose = true;
+                // Skip to end of flag
+                while (cmd[i] != 0 and cmd[i] != ' ') : (i += 1) {}
+                continue;
+            }
+        } else {
+            // Positional arguments
+            const arg_start = i;
+            while (cmd[i] != 0 and cmd[i] != ' ') : (i += 1) {}
+
+            if (i > arg_start) {
+                const arg = cmd[arg_start..i];
+
+                // First positional arg is port
+                if (port == 8000) {
+                    port = parsePort(arg);
+                } else {
+                    // Second positional arg is directory
+                    directory = arg;
+                }
             }
         }
     }
-    
-    return .{ .port = port, .directory = directory };
+
+    return .{ .port = port, .directory = directory, .verbose = verbose };
 }
 
 // Check if character at position i is inside quotes
@@ -72,6 +81,17 @@ fn inQuotes(cmd: [*:0]const u8, i: usize) bool {
         }
     }
     return (quote_count % 2) == 1;
+}
+
+// Check if string starts with prefix
+fn startsWith(str: [*:0]const u8, prefix: []const u8) bool {
+    var i: usize = 0;
+    while (i < prefix.len) : (i += 1) {
+        if (str[i] == 0 or str[i] != prefix[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Parse port number from string
@@ -90,15 +110,18 @@ fn parsePort(str: []const u8) u16 {
 // Entry point
 pub fn main() !void {
     const args = parseArgs();
-    
+
     print("http-zerver: Starting HTTP server\n");
     print("Port: ");
     printInt(args.port);
     print("\nDirectory: ");
     print(args.directory);
+    if (args.verbose) {
+        print("\nVerbose logging: enabled");
+    }
     print("\n\n");
-    
-    try http.serve(args.port, args.directory);
+
+    try http.serve(args.port, args.directory, args.verbose);
 }
 
 // Print integer to console
@@ -131,4 +154,4 @@ fn printInt(n: u16) void {
     }
 
     print(buffer[0..i]);
-} 
+}
