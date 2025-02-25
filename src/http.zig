@@ -446,6 +446,13 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     header_buf[header_len] = '\n';
     header_len += 1;
 
+    // Connection: close header
+    const connection_close = "Connection: close\r\n";
+    for (connection_close) |c| {
+        header_buf[header_len] = c;
+        header_len += 1;
+    }
+
     // End of headers
     header_buf[header_len] = '\r';
     header_len += 1;
@@ -453,6 +460,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     header_len += 1;
 
     // Send headers
+    debugPrint("Sending HTTP headers", header_buf[0..header_len]);
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
     // Send file content
@@ -460,14 +468,18 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     var bytes_read: u32 = 0;
 
     while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
+        debugPrint("Sending file content bytes", intToStr(bytes_read));
         _ = send(client_socket, &read_buf, @intCast(bytes_read), 0);
     }
 
     // Close the connection
+    debugPrint("Closing connection", "");
     _ = shutdown(client_socket, SD_SEND);
 }
 
 fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []const u8) void {
+    debugPrint("Sending error response", intToStr(status_code));
+
     var response_buf: [1024]u8 = undefined;
     var response_len: usize = 0;
 
@@ -603,6 +615,13 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
     response_buf[response_len] = '\n';
     response_len += 1;
 
+    // Connection: close header
+    const connection_close = "Connection: close\r\n";
+    for (connection_close) |c| {
+        response_buf[response_len] = c;
+        response_len += 1;
+    }
+
     // End of headers
     response_buf[response_len] = '\r';
     response_len += 1;
@@ -610,10 +629,16 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
     response_len += 1;
 
     // Send headers
+    debugPrint("Sending error headers", response_buf[0..response_len]);
     _ = send(client_socket, &response_buf, @intCast(response_len), 0);
 
     // Send body
+    debugPrint("Sending error body", body_buf[0..body_len]);
     _ = send(client_socket, &body_buf, @intCast(body_len), 0);
+
+    // Close the connection
+    debugPrint("Closing connection after error", "");
+    _ = shutdown(client_socket, SD_SEND);
 }
 
 // Helper function to convert integer to string for debugging
