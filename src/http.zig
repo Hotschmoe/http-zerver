@@ -19,7 +19,6 @@ const SOL_SOCKET = 0xFFFF;
 const SO_RCVTIMEO = 0x1006;
 const SO_SNDTIMEO = 0x1005;
 const SO_REUSEADDR = 0x0004;
-const TCP_NODELAY = 0x0001;
 
 const GENERIC_READ = 0x80000000;
 const FILE_SHARE_READ = 0x00000001;
@@ -134,7 +133,12 @@ fn getMimeType(path: []const u8) []const u8 {
 // String utilities
 fn endsWith(str: []const u8, suffix: []const u8) bool {
     if (str.len < suffix.len) return false;
-    return eql(str[str.len - suffix.len ..], suffix);
+    const start = str.len - suffix.len;
+    var i: usize = 0;
+    while (i < suffix.len) : (i += 1) {
+        if (str[start + i] != suffix[i]) return false;
+    }
+    return true;
 }
 
 fn eql(a: []const u8, b: []const u8) bool {
@@ -255,8 +259,6 @@ pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
         _ = setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL));
         // Set send timeout
         _ = setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL));
-        // Enable TCP_NODELAY
-        _ = setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, @ptrCast(&opt_val), @sizeOf(i32));
 
         handleConnection(client_socket, directory);
     }
@@ -360,7 +362,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     // If path is empty, serve index.html
     if (req_path.len == 0) {
         const index = "index.html";
-        logRequest("Using default file", index);
         for (index) |c| {
             path_buf[path_len] = c;
             path_len += 1;
@@ -383,11 +384,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     // Debug: Print full file path
     logRequest("Full file path", path_buf[0..path_len]);
-
-    // Log memory before file operations
-    if (verbose_logging) {
-        logRequest("Before file operations", "");
-    }
 
     // Check if file exists before trying to open it
     const file_attrs = GetFileAttributesA(@ptrCast(&path_buf));
@@ -643,8 +639,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         return;
     }
     defer _ = CloseHandle(file_handle);
-
-    logRequest("File opened successfully", "");
 
     // Get file size
     const file_size = GetFileSize(file_handle, null);
