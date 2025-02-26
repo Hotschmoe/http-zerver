@@ -17,6 +17,7 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .windows) {
         exe.linkSystemLibrary("ws2_32");
         exe.linkSystemLibrary("kernel32");
+        exe.linkSystemLibrary("psapi");
     }
 
     // Install the executable

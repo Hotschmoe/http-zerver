@@ -14,11 +14,22 @@ const SD_SEND = 1;
 const FIONBIO = 0x8004667E;
 const SOMAXCONN = 0x7fffffff;
 
+// Socket options
+const SOL_SOCKET = 0xFFFF;
+const SO_RCVTIMEO = 0x1006;
+const SO_SNDTIMEO = 0x1005;
+const SO_REUSEADDR = 0x0004;
+const TCP_NODELAY = 0x0001;
+
 const GENERIC_READ = 0x80000000;
 const FILE_SHARE_READ = 0x00000001;
 const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x80;
 const INVALID_HANDLE_VALUE = @as(usize, 0xFFFFFFFFFFFFFFFF);
+
+// Memory information constants
+const PROCESS_QUERY_INFORMATION = 0x0400;
+const PROCESS_VM_READ = 0x0010;
 
 // Socket address structure
 const sockaddr_in = extern struct {
@@ -26,6 +37,39 @@ const sockaddr_in = extern struct {
     sin_port: u16,
     sin_addr: u32,
     sin_zero: [8]u8,
+};
+
+// Socket timeout structure
+const TIMEVAL = extern struct {
+    tv_sec: i32,
+    tv_usec: i32,
+};
+
+// Memory status structure
+const MEMORYSTATUSEX = extern struct {
+    dwLength: u32,
+    dwMemoryLoad: u32,
+    ullTotalPhys: u64,
+    ullAvailPhys: u64,
+    ullTotalPageFile: u64,
+    ullAvailPageFile: u64,
+    ullTotalVirtual: u64,
+    ullAvailVirtual: u64,
+    ullAvailExtendedVirtual: u64,
+};
+
+// Process memory counters
+const PROCESS_MEMORY_COUNTERS = extern struct {
+    cb: u32,
+    PageFaultCount: u32,
+    PeakWorkingSetSize: usize,
+    WorkingSetSize: usize,
+    QuotaPeakPagedPoolUsage: usize,
+    QuotaPagedPoolUsage: usize,
+    QuotaPeakNonPagedPoolUsage: usize,
+    QuotaNonPagedPoolUsage: usize,
+    PagefileUsage: usize,
+    PeakPagefileUsage: usize,
 };
 
 // Windows API functions
@@ -40,6 +84,17 @@ extern "ws2_32" fn recv(s: usize, buf: [*]u8, len: i32, flags: i32) callconv(.C)
 extern "ws2_32" fn send(s: usize, buf: [*]const u8, len: i32, flags: i32) callconv(.C) i32;
 extern "ws2_32" fn shutdown(s: usize, how: i32) callconv(.C) i32;
 extern "ws2_32" fn htons(hostshort: u16) callconv(.C) u16;
+extern "ws2_32" fn setsockopt(s: usize, level: i32, optname: i32, optval: [*]const u8, optlen: i32) callconv(.C) i32;
+extern "ws2_32" fn WSAGetLastError() callconv(.C) i32;
+
+// Memory information functions
+extern "kernel32" fn GlobalMemoryStatusEx(lpBuffer: *MEMORYSTATUSEX) callconv(.C) i32;
+extern "kernel32" fn GetCurrentProcess() callconv(.C) usize;
+extern "psapi" fn GetProcessMemoryInfo(
+    Process: usize,
+    ppsmemCounters: *PROCESS_MEMORY_COUNTERS,
+    cb: u32,
+) callconv(.C) i32;
 
 // File I/O functions
 extern "kernel32" fn CreateFileA(
@@ -175,10 +230,101 @@ fn debugPrint(prefix: []const u8, message: []const u8) void {
     }
 }
 
+// Log memory usage
+fn logMemoryUsage(context: []const u8) void {
+    if (!verbose_logging) return;
+
+    print("[MEMORY] ");
+    print(context);
+    print(": ");
+
+    // Get system memory information
+    var memStatus = MEMORYSTATUSEX{
+        .dwLength = @sizeOf(MEMORYSTATUSEX),
+        .dwMemoryLoad = 0,
+        .ullTotalPhys = 0,
+        .ullAvailPhys = 0,
+        .ullTotalPageFile = 0,
+        .ullAvailPageFile = 0,
+        .ullTotalVirtual = 0,
+        .ullAvailVirtual = 0,
+        .ullAvailExtendedVirtual = 0,
+    };
+
+    if (GlobalMemoryStatusEx(&memStatus) != 0) {
+        print("System Memory: ");
+        print("Load=");
+        printInt(@intCast(memStatus.dwMemoryLoad));
+        print("%, ");
+
+        print("Available=");
+        printSize(memStatus.ullAvailPhys);
+        print("/");
+        printSize(memStatus.ullTotalPhys);
+        print(" ");
+    } else {
+        print("Failed to get system memory info. ");
+    }
+
+    // Get process memory information
+    var procMem = PROCESS_MEMORY_COUNTERS{
+        .cb = @sizeOf(PROCESS_MEMORY_COUNTERS),
+        .PageFaultCount = 0,
+        .PeakWorkingSetSize = 0,
+        .WorkingSetSize = 0,
+        .QuotaPeakPagedPoolUsage = 0,
+        .QuotaPagedPoolUsage = 0,
+        .QuotaPeakNonPagedPoolUsage = 0,
+        .QuotaNonPagedPoolUsage = 0,
+        .PagefileUsage = 0,
+        .PeakPagefileUsage = 0,
+    };
+
+    const process = GetCurrentProcess();
+    if (GetProcessMemoryInfo(process, &procMem, @sizeOf(PROCESS_MEMORY_COUNTERS)) != 0) {
+        print("Process: ");
+        print("Working Set=");
+        printSize(procMem.WorkingSetSize);
+        print(" (Peak=");
+        printSize(procMem.PeakWorkingSetSize);
+        print("), ");
+
+        print("PageFile=");
+        printSize(procMem.PagefileUsage);
+        print(" (Peak=");
+        printSize(procMem.PeakPagefileUsage);
+        print(")");
+    } else {
+        print("Failed to get process memory info");
+    }
+
+    print("\n");
+}
+
+// Print size in human-readable format
+fn printSize(size: usize) void {
+    if (size < 1024) {
+        printInt(@intCast(size));
+        print(" B");
+    } else if (size < 1024 * 1024) {
+        printInt(@intCast(size / 1024));
+        print(" KB");
+    } else if (size < 1024 * 1024 * 1024) {
+        printInt(@intCast(size / (1024 * 1024)));
+        print(" MB");
+    } else {
+        printInt(@intCast(size / (1024 * 1024 * 1024)));
+        print(" GB");
+    }
+}
+
 // Main server function
 pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
     // Set global verbose flag
     verbose_logging = verbose;
+
+    // Log initial memory usage
+    logMemoryUsage("Server starting");
 
     // Initialize Winsock
     var wsa_data: WSAData = undefined;
@@ -196,6 +342,13 @@ pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
         return error.SocketCreationFailed;
     }
     defer _ = closesocket(server_socket);
+
+    // Set socket options for reuse
+    var opt_val: i32 = 1;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, @ptrCast(&opt_val), @sizeOf(i32)) == SOCKET_ERROR) {
+        print("Failed to set SO_REUSEADDR\n");
+        // Continue anyway, not critical
+    }
 
     // Bind socket
     var server_addr = sockaddr_in{
@@ -231,6 +384,13 @@ pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
         print("\n");
     }
 
+    // Log memory usage after initialization
+    logMemoryUsage("Server initialized");
+
+    // Counter for periodic memory logging
+    var request_counter: u32 = 0;
+    var active_connections: u32 = 0;
+
     // Accept and handle connections
     while (true) {
         const client_socket = accept(server_socket, null, null);
@@ -239,7 +399,42 @@ pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
             continue;
         }
 
+        // Set socket timeouts to prevent hanging connections
+        var timeout = TIMEVAL{
+            .tv_sec = 10, // 10 seconds timeout
+            .tv_usec = 0,
+        };
+
+        // Set receive timeout
+        if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL)) == SOCKET_ERROR) {
+            debugPrint("Failed to set SO_RCVTIMEO", intToStr(@intCast(WSAGetLastError())));
+            // Continue anyway
+        }
+
+        // Set send timeout
+        if (setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL)) == SOCKET_ERROR) {
+            debugPrint("Failed to set SO_SNDTIMEO", intToStr(@intCast(WSAGetLastError())));
+            // Continue anyway
+        }
+
+        // Enable TCP_NODELAY to disable Nagle's algorithm
+        if (setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, @ptrCast(&opt_val), @sizeOf(i32)) == SOCKET_ERROR) {
+            debugPrint("Failed to set TCP_NODELAY", intToStr(@intCast(WSAGetLastError())));
+            // Continue anyway
+        }
+
+        // Log memory usage periodically (every 10 requests)
+        request_counter += 1;
+        active_connections += 1;
+        if (request_counter % 10 == 0) {
+            logMemoryUsage("After handling 10 requests");
+            print("Active connections: ");
+            printInt(@intCast(active_connections));
+            print("\n");
+        }
+
         handleConnection(client_socket, directory);
+        active_connections -= 1;
     }
 }
 
@@ -275,13 +470,33 @@ fn printInt(n: u16) void {
 }
 
 fn handleConnection(client_socket: usize, directory: []const u8) void {
-    defer _ = closesocket(client_socket);
+    defer {
+        // Ensure socket is properly closed
+        _ = shutdown(client_socket, SD_SEND);
+        _ = closesocket(client_socket);
+
+        if (verbose_logging) {
+            debugPrint("Connection closed", "Socket resources released");
+        }
+    }
 
     var buffer: [4096]u8 = undefined;
     const bytes_received = recv(client_socket, &buffer, buffer.len, 0);
 
     if (bytes_received <= 0) {
+        if (verbose_logging) {
+            if (bytes_received == 0) {
+                debugPrint("Connection closed by client", "");
+            } else {
+                debugPrint("Receive error", intToStr(@intCast(WSAGetLastError())));
+            }
+        }
         return;
+    }
+
+    // Log memory usage for large requests
+    if (bytes_received > 2048 and verbose_logging) {
+        logMemoryUsage("Large request received");
     }
 
     const request = parseRequest(buffer[0..@intCast(bytes_received)]) catch {
@@ -300,7 +515,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         return;
     }
 
-    // Normalize path
+    // Normalize path and remove query parameters
     var path_buf: [260]u8 = undefined; // MAX_PATH
     var path_len: usize = 0;
 
@@ -321,6 +536,15 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     var req_path = request.path;
     if (req_path.len > 0 and req_path[0] == '/') {
         req_path = req_path[1..];
+    }
+
+    // Remove query parameters if present
+    var query_pos: usize = 0;
+    while (query_pos < req_path.len) : (query_pos += 1) {
+        if (req_path[query_pos] == '?') {
+            req_path = req_path[0..query_pos];
+            break;
+        }
     }
 
     debugPrint("Request path (normalized)", req_path);
@@ -351,6 +575,11 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     // Debug: Print full file path
     debugPrint("Full file path", path_buf[0..path_len]);
+
+    // Log memory before file operations
+    if (verbose_logging) {
+        logMemoryUsage("Before file operations");
+    }
 
     // Check if file exists before trying to open it
     const file_attrs = GetFileAttributesA(@ptrCast(&path_buf));
@@ -479,6 +708,11 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
                 return;
             }
 
+            // Log memory usage for large files
+            if (file_size > 1024 * 1024 and verbose_logging) { // Log for files > 1MB
+                logMemoryUsage("Before sending large index file");
+            }
+
             // Determine MIME type
             const mime_type = getMimeType("index.html");
 
@@ -570,12 +804,14 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
             // Send file content
-            var read_buf: [8192]u8 = undefined;
-            var bytes_read: u32 = 0;
+            if (!sendFileContent(client_socket, file_handle, file_size)) {
+                debugPrint("Failed to send index file content", "");
+                return;
+            }
 
-            while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
-                debugPrint("Sending index file content bytes", intToStr(bytes_read));
-                _ = send(client_socket, &read_buf, @intCast(bytes_read), 0);
+            // Log memory usage after sending large files
+            if (file_size > 1024 * 1024 and verbose_logging) {
+                logMemoryUsage("After sending large index file");
             }
 
             // Close the connection
@@ -607,6 +843,11 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     if (file_size == 0xFFFFFFFF) { // INVALID_FILE_SIZE
         sendErrorResponse(client_socket, 500, "Internal Server Error");
         return;
+    }
+
+    // Log memory usage for large files
+    if (file_size > 1024 * 1024 and verbose_logging) { // Log for files > 1MB
+        logMemoryUsage("Before sending large file");
     }
 
     // Determine MIME type
@@ -700,12 +941,14 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
     // Send file content
-    var read_buf: [8192]u8 = undefined;
-    var bytes_read: u32 = 0;
+    if (!sendFileContent(client_socket, file_handle, file_size)) {
+        debugPrint("Failed to send file content", "");
+        return;
+    }
 
-    while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
-        debugPrint("Sending file content bytes", intToStr(bytes_read));
-        _ = send(client_socket, &read_buf, @intCast(bytes_read), 0);
+    // Log memory usage after sending large files
+    if (file_size > 1024 * 1024 and verbose_logging) {
+        logMemoryUsage("After sending large file");
     }
 
     // Close the connection
@@ -945,6 +1188,11 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
     print(path);
     print("\n");
 
+    // Log memory usage before directory listing
+    if (verbose_logging) {
+        logMemoryUsage("Before directory listing");
+    }
+
     // Create search pattern (path\*)
     var search_pattern: [512]u8 = undefined;
     var pattern_len: usize = 0;
@@ -1042,6 +1290,8 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
 
     // Process all files in the directory
     var has_more_files = true;
+    var file_count: u32 = 0;
+
     while (has_more_files) {
         // Get filename as a slice
         var filename_len: usize = 0;
@@ -1125,12 +1375,24 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
                 html_buf[html_len] = c;
                 html_len += 1;
             }
+
+            file_count += 1;
+
+            // Log memory usage periodically for large directories
+            if (file_count % 100 == 0 and verbose_logging) {
+                logMemoryUsage("During directory listing (files processed)");
+            }
         }
 
         // Find next file
         if (FindNextFileA(find_handle, &find_data) == 0) {
             has_more_files = false;
         }
+    }
+
+    // Log memory usage after processing all files
+    if (file_count > 100 and verbose_logging) {
+        logMemoryUsage("After processing directory with many files");
     }
 
     // Close the HTML
@@ -1229,7 +1491,48 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
     print("Sending directory listing HTML\n");
     _ = send(client_socket, &html_buf, @intCast(html_len), 0);
 
+    // Log memory usage after sending directory listing
+    if (verbose_logging) {
+        logMemoryUsage("After sending directory listing");
+    }
+
     // Close the connection
     print("Closing connection after directory listing\n");
     _ = shutdown(client_socket, SD_SEND);
+}
+
+// Send file content with improved error handling
+fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32) bool {
+    var read_buf: [8192]u8 = undefined;
+    var bytes_read: u32 = 0;
+    var total_bytes_sent: u32 = 0;
+    var send_result: i32 = 0;
+
+    while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
+        debugPrint("Reading file content bytes", intToStr(bytes_read));
+
+        // Send the data with error handling
+        send_result = send(client_socket, &read_buf, @intCast(bytes_read), 0);
+
+        if (send_result == SOCKET_ERROR) {
+            const error_code = WSAGetLastError();
+            debugPrint("Send error", intToStr(@intCast(error_code)));
+            return false;
+        }
+
+        total_bytes_sent += @intCast(send_result);
+
+        // Log memory usage periodically during large file transfers
+        if (file_size > 1024 * 1024 and total_bytes_sent % (1024 * 1024) < bytes_read and verbose_logging) {
+            logMemoryUsage("During file transfer");
+        }
+    }
+
+    // Check if we sent all the data
+    if (total_bytes_sent != file_size) {
+        debugPrint("Warning: Sent bytes", intToStr(total_bytes_sent));
+        debugPrint("Expected file size", intToStr(file_size));
+    }
+
+    return true;
 }
