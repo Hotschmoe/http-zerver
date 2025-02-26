@@ -488,7 +488,8 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             if (bytes_received == 0) {
                 debugPrint("Connection closed by client", "");
             } else {
-                debugPrint("Receive error", intToStr(@intCast(WSAGetLastError())));
+                const error_code = WSAGetLastError();
+                debugPrint("Receive error code", intToStr(@intCast(error_code)));
             }
         }
         return;
@@ -1516,7 +1517,7 @@ fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32) boo
 
         if (send_result == SOCKET_ERROR) {
             const error_code = WSAGetLastError();
-            debugPrint("Send error", intToStr(@intCast(error_code)));
+            debugPrint("Send error code", intToStr(@intCast(error_code)));
             return false;
         }
 
