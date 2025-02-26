@@ -213,10 +213,7 @@ pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
 
     // Set socket options for reuse
     var opt_val: i32 = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, @ptrCast(&opt_val), @sizeOf(i32)) == SOCKET_ERROR) {
-        print("Failed to set SO_REUSEADDR\n");
-        // Continue anyway, not critical
-    }
+    _ = setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, @ptrCast(&opt_val), @sizeOf(i32));
 
     // Bind socket
     var server_addr = sockaddr_in{
@@ -246,10 +243,7 @@ pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
     // Accept and handle connections
     while (true) {
         const client_socket = accept(server_socket, null, null);
-        if (client_socket == INVALID_SOCKET) {
-            if (verbose_logging) print("Accept failed\n");
-            continue;
-        }
+        if (client_socket == INVALID_SOCKET) continue;
 
         // Set socket timeouts
         var timeout = TIMEVAL{
@@ -301,7 +295,6 @@ fn printInt(n: u16) void {
 
 fn handleConnection(client_socket: usize, directory: []const u8) void {
     defer {
-        // Ensure socket is properly closed
         _ = shutdown(client_socket, SD_SEND);
         _ = closesocket(client_socket);
     }
@@ -309,20 +302,9 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     var buffer: [4096]u8 = undefined;
     const bytes_received = recv(client_socket, &buffer, buffer.len, 0);
 
-    if (bytes_received <= 0) {
-        if (verbose_logging) {
-            if (bytes_received == 0) {
-                logRequest("Connection closed by client", "");
-            } else {
-                const error_code = WSAGetLastError();
-                logRequest("Receive error code", intToStr(@intCast(error_code)));
-            }
-        }
-        return;
-    }
+    if (bytes_received <= 0) return;
 
     const request = parseRequest(buffer[0..@intCast(bytes_received)]) catch {
-        // For invalid requests, we can't determine the method, so don't send a body
         sendErrorResponse(client_socket, 400, "Bad Request", false);
         return;
     };
@@ -630,7 +612,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
             // Send file content
-            if (!sendFileContent(client_socket, file_handle, file_size, send_body)) {
+            if (!sendFileContent(client_socket, file_handle, send_body)) {
                 logRequest("Failed to send index file content", "");
                 return;
             }
@@ -767,7 +749,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
     // Send file content
-    if (!sendFileContent(client_socket, file_handle, file_size, send_body)) {
+    if (!sendFileContent(client_socket, file_handle, send_body)) {
         logRequest("Failed to send file content", "");
         return;
     }
@@ -783,8 +765,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 }
 
 fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []const u8, send_body: bool) void {
-    logRequest("Sending error response", intToStr(status_code));
-
     var response_buf: [1024]u8 = undefined;
     var response_len: usize = 0;
 
@@ -1291,7 +1271,7 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
 }
 
 // Send file content with improved error handling
-fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32, send_body: bool) bool {
+fn sendFileContent(client_socket: usize, file_handle: usize, send_body: bool) bool {
     // If this is a HEAD request, don't send the body
     if (!send_body) {
         return true;
@@ -1303,29 +1283,13 @@ fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32, sen
     var send_result: i32 = 0;
 
     while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
-        logRequest("Reading file content bytes", intToStr(bytes_read));
-
-        // Send the data with error handling
         send_result = send(client_socket, &read_buf, @intCast(bytes_read), 0);
 
         if (send_result == SOCKET_ERROR) {
-            const error_code = WSAGetLastError();
-            logRequest("Send error code", intToStr(@intCast(error_code)));
             return false;
         }
 
         total_bytes_sent += @intCast(send_result);
-
-        // Log memory usage periodically during large file transfers
-        if (file_size > 1024 * 1024 and total_bytes_sent % (1024 * 1024) < bytes_read and verbose_logging) {
-            logRequest("During file transfer", "");
-        }
-    }
-
-    // Check if we sent all the data
-    if (total_bytes_sent != file_size) {
-        logRequest("Warning: Sent bytes", intToStr(total_bytes_sent));
-        logRequest("Expected file size", intToStr(file_size));
     }
 
     return true;
