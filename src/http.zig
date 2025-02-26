@@ -501,7 +501,8 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     }
 
     const request = parseRequest(buffer[0..@intCast(bytes_received)]) catch {
-        sendErrorResponse(client_socket, 400, "Bad Request");
+        // For invalid requests, we can't determine the method, so don't send a body
+        sendErrorResponse(client_socket, 400, "Bad Request", false);
         return;
     };
 
@@ -510,9 +511,12 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     debugPrint("Request path", request.path);
     debugPrint("Request version", request.version);
 
-    // Only handle GET requests
-    if (!eql(request.method, "GET")) {
-        sendErrorResponse(client_socket, 405, "Method Not Allowed");
+    // Flag to determine if we should send the body (true for GET, false for HEAD)
+    const send_body = eql(request.method, "GET");
+
+    // Only handle GET and HEAD requests
+    if (!eql(request.method, "GET") and !eql(request.method, "HEAD")) {
+        sendErrorResponse(client_socket, 405, "Method Not Allowed", send_body);
         return;
     }
 
@@ -587,7 +591,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     if (file_attrs == 0xFFFFFFFF) { // INVALID_FILE_ATTRIBUTES
         const error_code = GetLastError();
         debugPrint("File not found, error code", intToStr(error_code));
-        sendErrorResponse(client_socket, 404, "Not Found");
+        sendErrorResponse(client_socket, 404, "Not Found", send_body);
         return;
     }
 
@@ -697,7 +701,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             if (file_handle == INVALID_HANDLE_VALUE) {
                 const error_code = GetLastError();
                 debugPrint("Failed to open index file, error code", intToStr(error_code));
-                sendErrorResponse(client_socket, 500, "Internal Server Error");
+                sendErrorResponse(client_socket, 500, "Internal Server Error", send_body);
                 return;
             }
             defer _ = CloseHandle(file_handle);
@@ -705,7 +709,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             // Get file size
             const file_size = GetFileSize(file_handle, null);
             if (file_size == 0xFFFFFFFF) { // INVALID_FILE_SIZE
-                sendErrorResponse(client_socket, 500, "Internal Server Error");
+                sendErrorResponse(client_socket, 500, "Internal Server Error", send_body);
                 return;
             }
 
@@ -805,7 +809,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
             // Send file content
-            if (!sendFileContent(client_socket, file_handle, file_size)) {
+            if (!sendFileContent(client_socket, file_handle, file_size, send_body)) {
                 debugPrint("Failed to send index file content", "");
                 return;
             }
@@ -821,7 +825,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             return;
         } else {
             // No index file, generate directory listing
-            listDirectory(client_socket, path_buf[0..path_len], request.path);
+            listDirectory(client_socket, path_buf[0..path_len], request.path, send_body);
             return;
         }
     }
@@ -832,7 +836,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     if (file_handle == INVALID_HANDLE_VALUE) {
         const error_code = GetLastError();
         debugPrint("Failed to open file, error code", intToStr(error_code));
-        sendErrorResponse(client_socket, 404, "Not Found");
+        sendErrorResponse(client_socket, 404, "Not Found", send_body);
         return;
     }
     defer _ = CloseHandle(file_handle);
@@ -842,7 +846,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     // Get file size
     const file_size = GetFileSize(file_handle, null);
     if (file_size == 0xFFFFFFFF) { // INVALID_FILE_SIZE
-        sendErrorResponse(client_socket, 500, "Internal Server Error");
+        sendErrorResponse(client_socket, 500, "Internal Server Error", send_body);
         return;
     }
 
@@ -942,7 +946,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
     // Send file content
-    if (!sendFileContent(client_socket, file_handle, file_size)) {
+    if (!sendFileContent(client_socket, file_handle, file_size, send_body)) {
         debugPrint("Failed to send file content", "");
         return;
     }
@@ -957,7 +961,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     _ = shutdown(client_socket, SD_SEND);
 }
 
-fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []const u8) void {
+fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []const u8, send_body: bool) void {
     debugPrint("Sending error response", intToStr(status_code));
 
     var response_buf: [1024]u8 = undefined;
@@ -1112,9 +1116,11 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
     debugPrint("Sending error headers", response_buf[0..response_len]);
     _ = send(client_socket, &response_buf, @intCast(response_len), 0);
 
-    // Send body
-    debugPrint("Sending error body", body_buf[0..body_len]);
-    _ = send(client_socket, &body_buf, @intCast(body_len), 0);
+    // Send body only for GET requests
+    if (send_body) {
+        debugPrint("Sending error body", body_buf[0..body_len]);
+        _ = send(client_socket, &body_buf, @intCast(body_len), 0);
+    }
 
     // Close the connection
     debugPrint("Closing connection after error", "");
@@ -1184,7 +1190,7 @@ const FILETIME = extern struct {
 };
 
 // List directory contents and generate HTML
-fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u8) void {
+fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u8, send_body: bool) void {
     print("Listing directory: ");
     print(path);
     print("\n");
@@ -1215,7 +1221,7 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
     const find_handle = FindFirstFileA(@ptrCast(&search_pattern), &find_data);
 
     if (find_handle == INVALID_HANDLE_VALUE) {
-        sendErrorResponse(client_socket, 500, "Error listing directory");
+        sendErrorResponse(client_socket, 500, "Error listing directory", send_body);
         return;
     }
     defer _ = FindClose(find_handle);
@@ -1224,189 +1230,219 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
     var html_buf: [8192]u8 = undefined;
     var html_len: usize = 0;
 
-    // HTML header
-    const html_header =
-        "<!DOCTYPE HTML>\n" ++
-        "<html lang=\"en\">\n" ++
-        "<head>\n" ++
-        "    <meta charset=\"utf-8\">\n" ++
-        "    <title>Directory listing for ";
+    // Only build the HTML if we're sending the body (GET request)
+    if (send_body) {
+        // HTML header
+        const html_header =
+            "<!DOCTYPE HTML>\n" ++
+            "<html lang=\"en\">\n" ++
+            "<head>\n" ++
+            "    <meta charset=\"utf-8\">\n" ++
+            "    <title>Directory listing for ";
 
-    for (html_header) |c| {
-        html_buf[html_len] = c;
-        html_len += 1;
-    }
-
-    // Add the request path to the title
-    for (request_path) |c| {
-        html_buf[html_len] = c;
-        html_len += 1;
-    }
-
-    // Continue with HTML
-    const html_header2 =
-        "</title>\n" ++
-        "    <style>\n" ++
-        "        body { font-family: Arial, sans-serif; margin: 20px; }\n" ++
-        "        h1 { border-bottom: 1px solid #ccc; padding-bottom: 10px; }\n" ++
-        "        ul { list-style-type: none; padding: 0; }\n" ++
-        "        li { margin: 5px 0; }\n" ++
-        "        a { text-decoration: none; color: #0366d6; }\n" ++
-        "        a:hover { text-decoration: underline; }\n" ++
-        "    </style>\n" ++
-        "</head>\n" ++
-        "<body>\n" ++
-        "    <h1>Directory listing for ";
-
-    for (html_header2) |c| {
-        html_buf[html_len] = c;
-        html_len += 1;
-    }
-
-    // Add the request path again
-    for (request_path) |c| {
-        html_buf[html_len] = c;
-        html_len += 1;
-    }
-
-    // Start the file list
-    const html_list_start =
-        "</h1>\n" ++
-        "    <hr>\n" ++
-        "    <ul>\n";
-
-    for (html_list_start) |c| {
-        html_buf[html_len] = c;
-        html_len += 1;
-    }
-
-    // Add parent directory link if not at root
-    if (request_path.len > 1) {
-        const parent_link = "        <li><a href=\"..\">..</a> (Parent Directory)</li>\n";
-        for (parent_link) |c| {
+        for (html_header) |c| {
             html_buf[html_len] = c;
             html_len += 1;
         }
-    }
 
-    // Process all files in the directory
-    var has_more_files = true;
-    var file_count: u32 = 0;
-
-    while (has_more_files) {
-        // Get filename as a slice
-        var filename_len: usize = 0;
-        while (filename_len < find_data.cFileName.len and find_data.cFileName[filename_len] != 0) {
-            filename_len += 1;
+        // Add the request path to the title
+        for (request_path) |c| {
+            html_buf[html_len] = c;
+            html_len += 1;
         }
-        const filename = find_data.cFileName[0..filename_len];
 
-        // Skip . and .. entries
-        if (!eql(filename, ".") and !eql(filename, "..")) {
-            // Start list item
-            html_buf[html_len] = ' ';
-            html_len += 1;
-            html_buf[html_len] = ' ';
-            html_len += 1;
-            html_buf[html_len] = ' ';
-            html_len += 1;
-            html_buf[html_len] = ' ';
-            html_len += 1;
-            html_buf[html_len] = ' ';
-            html_len += 1;
-            html_buf[html_len] = '<';
-            html_len += 1;
-            html_buf[html_len] = 'l';
-            html_len += 1;
-            html_buf[html_len] = 'i';
-            html_len += 1;
-            html_buf[html_len] = '>';
-            html_len += 1;
-            html_buf[html_len] = '<';
-            html_len += 1;
-            html_buf[html_len] = 'a';
-            html_len += 1;
-            html_buf[html_len] = ' ';
-            html_len += 1;
-            html_buf[html_len] = 'h';
-            html_len += 1;
-            html_buf[html_len] = 'r';
-            html_len += 1;
-            html_buf[html_len] = 'e';
-            html_len += 1;
-            html_buf[html_len] = 'f';
-            html_len += 1;
-            html_buf[html_len] = '=';
-            html_len += 1;
-            html_buf[html_len] = '"';
-            html_len += 1;
+        // Continue with HTML
+        const html_header2 =
+            "</title>\n" ++
+            "    <style>\n" ++
+            "        body { font-family: Arial, sans-serif; margin: 20px; }\n" ++
+            "        h1 { border-bottom: 1px solid #ccc; padding-bottom: 10px; }\n" ++
+            "        ul { list-style-type: none; padding: 0; }\n" ++
+            "        li { margin: 5px 0; }\n" ++
+            "        a { text-decoration: none; color: #0366d6; }\n" ++
+            "        a:hover { text-decoration: underline; }\n" ++
+            "    </style>\n" ++
+            "</head>\n" ++
+            "<body>\n" ++
+            "    <h1>Directory listing for ";
 
-            // Add the filename as the link
-            for (filename) |c| {
+        for (html_header2) |c| {
+            html_buf[html_len] = c;
+            html_len += 1;
+        }
+
+        // Add the request path again
+        for (request_path) |c| {
+            html_buf[html_len] = c;
+            html_len += 1;
+        }
+
+        // Start the file list
+        const html_list_start =
+            "</h1>\n" ++
+            "    <hr>\n" ++
+            "    <ul>\n";
+
+        for (html_list_start) |c| {
+            html_buf[html_len] = c;
+            html_len += 1;
+        }
+
+        // Add parent directory link if not at root
+        if (request_path.len > 1) {
+            const parent_link = "        <li><a href=\"..\">..</a> (Parent Directory)</li>\n";
+            for (parent_link) |c| {
                 html_buf[html_len] = c;
                 html_len += 1;
             }
+        }
 
-            // Add trailing slash for directories
-            if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-                html_buf[html_len] = '/';
+        // Process all files in the directory
+        var has_more_files = true;
+        var file_count: u32 = 0;
+
+        while (has_more_files) {
+            // Get filename as a slice
+            var filename_len: usize = 0;
+            while (filename_len < find_data.cFileName.len and find_data.cFileName[filename_len] != 0) {
+                filename_len += 1;
+            }
+            const filename = find_data.cFileName[0..filename_len];
+
+            // Skip . and .. entries
+            if (!eql(filename, ".") and !eql(filename, "..")) {
+                // Start list item
+                html_buf[html_len] = ' ';
                 html_len += 1;
+                html_buf[html_len] = ' ';
+                html_len += 1;
+                html_buf[html_len] = ' ';
+                html_len += 1;
+                html_buf[html_len] = ' ';
+                html_len += 1;
+                html_buf[html_len] = ' ';
+                html_len += 1;
+                html_buf[html_len] = '<';
+                html_len += 1;
+                html_buf[html_len] = 'l';
+                html_len += 1;
+                html_buf[html_len] = 'i';
+                html_len += 1;
+                html_buf[html_len] = '>';
+                html_len += 1;
+                html_buf[html_len] = '<';
+                html_len += 1;
+                html_buf[html_len] = 'a';
+                html_len += 1;
+                html_buf[html_len] = ' ';
+                html_len += 1;
+                html_buf[html_len] = 'h';
+                html_len += 1;
+                html_buf[html_len] = 'r';
+                html_len += 1;
+                html_buf[html_len] = 'e';
+                html_len += 1;
+                html_buf[html_len] = 'f';
+                html_len += 1;
+                html_buf[html_len] = '=';
+                html_len += 1;
+                html_buf[html_len] = '"';
+                html_len += 1;
+
+                // Add the filename as the link
+                for (filename) |c| {
+                    html_buf[html_len] = c;
+                    html_len += 1;
+                }
+
+                // Add trailing slash for directories
+                if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                    html_buf[html_len] = '/';
+                    html_len += 1;
+                }
+
+                html_buf[html_len] = '"';
+                html_len += 1;
+                html_buf[html_len] = '>';
+                html_len += 1;
+
+                // Add the filename as the link text
+                for (filename) |c| {
+                    html_buf[html_len] = c;
+                    html_len += 1;
+                }
+
+                // Add indicators for directories
+                if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+                    html_buf[html_len] = '/';
+                    html_len += 1;
+                }
+
+                // Close the link and list item
+                const item_end = "</a></li>\n";
+                for (item_end) |c| {
+                    html_buf[html_len] = c;
+                    html_len += 1;
+                }
+
+                file_count += 1;
+
+                // Log memory usage periodically for large directories
+                if (file_count % 100 == 0 and verbose_logging) {
+                    logMemoryUsage("During directory listing (files processed)");
+                }
             }
 
-            html_buf[html_len] = '"';
-            html_len += 1;
-            html_buf[html_len] = '>';
-            html_len += 1;
-
-            // Add the filename as the link text
-            for (filename) |c| {
-                html_buf[html_len] = c;
-                html_len += 1;
-            }
-
-            // Add indicators for directories
-            if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-                html_buf[html_len] = '/';
-                html_len += 1;
-            }
-
-            // Close the link and list item
-            const item_end = "</a></li>\n";
-            for (item_end) |c| {
-                html_buf[html_len] = c;
-                html_len += 1;
-            }
-
-            file_count += 1;
-
-            // Log memory usage periodically for large directories
-            if (file_count % 100 == 0 and verbose_logging) {
-                logMemoryUsage("During directory listing (files processed)");
+            // Find next file
+            if (FindNextFileA(find_handle, &find_data) == 0) {
+                has_more_files = false;
             }
         }
 
-        // Find next file
-        if (FindNextFileA(find_handle, &find_data) == 0) {
-            has_more_files = false;
+        // Log memory usage after processing all files
+        if (file_count > 100 and verbose_logging) {
+            logMemoryUsage("After processing directory with many files");
         }
-    }
 
-    // Log memory usage after processing all files
-    if (file_count > 100 and verbose_logging) {
-        logMemoryUsage("After processing directory with many files");
-    }
+        // Close the HTML
+        const html_footer =
+            "    </ul>\n" ++
+            "    <hr>\n" ++
+            "    <p>http-zerver</p>\n" ++
+            "</body>\n" ++
+            "</html>\n";
 
-    // Close the HTML
-    const html_footer =
-        "    </ul>\n" ++
-        "    <hr>\n" ++
-        "    <p>http-zerver</p>\n" ++
-        "</body>\n" ++
-        "</html>\n";
+        for (html_footer) |c| {
+            html_buf[html_len] = c;
+            html_len += 1;
+        }
+    } else {
+        // For HEAD requests, we still need to count files to get the content length
+        var has_more_files = true;
+        var file_count: u32 = 0;
 
-    for (html_footer) |c| {
-        html_buf[html_len] = c;
-        html_len += 1;
+        while (has_more_files) {
+            // Get filename as a slice
+            var filename_len: usize = 0;
+            while (filename_len < find_data.cFileName.len and find_data.cFileName[filename_len] != 0) {
+                filename_len += 1;
+            }
+            const filename = find_data.cFileName[0..filename_len];
+
+            // Skip . and .. entries
+            if (!eql(filename, ".") and !eql(filename, "..")) {
+                file_count += 1;
+            }
+
+            // Find next file
+            if (FindNextFileA(find_handle, &find_data) == 0) {
+                has_more_files = false;
+            }
+        }
+
+        // Estimate HTML size based on file count
+        // This is a rough estimate for HEAD requests
+        html_len = 1000 + (file_count * 100);
     }
 
     // Send HTTP headers
@@ -1488,9 +1524,11 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
     print("Sending directory listing headers\n");
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
-    // Send HTML content
-    print("Sending directory listing HTML\n");
-    _ = send(client_socket, &html_buf, @intCast(html_len), 0);
+    // Send HTML content only for GET requests
+    if (send_body) {
+        print("Sending directory listing HTML\n");
+        _ = send(client_socket, &html_buf, @intCast(html_len), 0);
+    }
 
     // Log memory usage after sending directory listing
     if (verbose_logging) {
@@ -1503,7 +1541,12 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
 }
 
 // Send file content with improved error handling
-fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32) bool {
+fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32, send_body: bool) bool {
+    // If this is a HEAD request, don't send the body
+    if (!send_body) {
+        return true;
+    }
+
     var read_buf: [8192]u8 = undefined;
     var bytes_read: u32 = 0;
     var total_bytes_sent: u32 = 0;

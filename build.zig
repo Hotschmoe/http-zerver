@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     copy_exe.step.dependOn(&copy_assets.step);
 
     // Add a command to run the server from /www
-    const run_server = b.addSystemCommand(&[_][]const u8{ "powershell", "-Command", "cd www; ./http-zerver.exe 9000 . -v" });
+    const run_server = b.addSystemCommand(&[_][]const u8{ "powershell", "-Command", "cd www; ./http-zerver.exe 8000 . -v" });
     run_server.step.dependOn(&copy_exe.step);
 
     custom_run_step.dependOn(&run_server.step);
