@@ -27,10 +27,6 @@ const OPEN_EXISTING = 3;
 const FILE_ATTRIBUTE_NORMAL = 0x80;
 const INVALID_HANDLE_VALUE = @as(usize, 0xFFFFFFFFFFFFFFFF);
 
-// Memory information constants
-const PROCESS_QUERY_INFORMATION = 0x0400;
-const PROCESS_VM_READ = 0x0010;
-
 // Socket address structure
 const sockaddr_in = extern struct {
     sin_family: i16,
@@ -43,33 +39,6 @@ const sockaddr_in = extern struct {
 const TIMEVAL = extern struct {
     tv_sec: i32,
     tv_usec: i32,
-};
-
-// Memory status structure
-const MEMORYSTATUSEX = extern struct {
-    dwLength: u32,
-    dwMemoryLoad: u32,
-    ullTotalPhys: u64,
-    ullAvailPhys: u64,
-    ullTotalPageFile: u64,
-    ullAvailPageFile: u64,
-    ullTotalVirtual: u64,
-    ullAvailVirtual: u64,
-    ullAvailExtendedVirtual: u64,
-};
-
-// Process memory counters
-const PROCESS_MEMORY_COUNTERS = extern struct {
-    cb: u32,
-    PageFaultCount: u32,
-    PeakWorkingSetSize: usize,
-    WorkingSetSize: usize,
-    QuotaPeakPagedPoolUsage: usize,
-    QuotaPagedPoolUsage: usize,
-    QuotaPeakNonPagedPoolUsage: usize,
-    QuotaNonPagedPoolUsage: usize,
-    PagefileUsage: usize,
-    PeakPagefileUsage: usize,
 };
 
 // Windows API functions
@@ -86,15 +55,6 @@ extern "ws2_32" fn shutdown(s: usize, how: i32) callconv(.C) i32;
 extern "ws2_32" fn htons(hostshort: u16) callconv(.C) u16;
 extern "ws2_32" fn setsockopt(s: usize, level: i32, optname: i32, optval: [*]const u8, optlen: i32) callconv(.C) i32;
 extern "ws2_32" fn WSAGetLastError() callconv(.C) i32;
-
-// Memory information functions
-extern "kernel32" fn GlobalMemoryStatusEx(lpBuffer: *MEMORYSTATUSEX) callconv(.C) i32;
-extern "kernel32" fn GetCurrentProcess() callconv(.C) usize;
-extern "psapi" fn GetProcessMemoryInfo(
-    Process: usize,
-    ppsmemCounters: *PROCESS_MEMORY_COUNTERS,
-    cb: u32,
-) callconv(.C) i32;
 
 // File I/O functions
 extern "kernel32" fn CreateFileA(
@@ -116,6 +76,7 @@ extern "kernel32" fn ReadFile(
 extern "kernel32" fn CloseHandle(hObject: usize) callconv(.C) i32;
 extern "kernel32" fn GetFileSize(hFile: usize, lpFileSizeHigh: ?*u32) callconv(.C) u32;
 extern "kernel32" fn GetLastError() callconv(.C) u32;
+extern "kernel32" fn GetFileAttributesA(lpFileName: [*:0]const u8) callconv(.C) u32;
 
 // Console output
 extern "kernel32" fn GetStdHandle(nStdHandle: u32) callconv(.C) usize;
@@ -220,111 +181,18 @@ fn print(message: []const u8) void {
     _ = WriteConsoleA(stdout, message.ptr, @intCast(message.len), &written, null);
 }
 
-// Debug function to print file paths
-fn debugPrint(prefix: []const u8, message: []const u8) void {
-    if (verbose_logging) {
-        print(prefix);
-        print(": ");
-        print(message);
-        print("\n");
-    }
-}
-
-// Log memory usage
-fn logMemoryUsage(context: []const u8) void {
+// Log request info
+fn logRequest(method: []const u8, path: []const u8) void {
     if (!verbose_logging) return;
-
-    print("[MEMORY] ");
-    print(context);
-    print(": ");
-
-    // Get system memory information
-    var memStatus = MEMORYSTATUSEX{
-        .dwLength = @sizeOf(MEMORYSTATUSEX),
-        .dwMemoryLoad = 0,
-        .ullTotalPhys = 0,
-        .ullAvailPhys = 0,
-        .ullTotalPageFile = 0,
-        .ullAvailPageFile = 0,
-        .ullTotalVirtual = 0,
-        .ullAvailVirtual = 0,
-        .ullAvailExtendedVirtual = 0,
-    };
-
-    if (GlobalMemoryStatusEx(&memStatus) != 0) {
-        print("System Memory: ");
-        print("Load=");
-        printInt(@intCast(memStatus.dwMemoryLoad));
-        print("%, ");
-
-        print("Available=");
-        printSize(memStatus.ullAvailPhys);
-        print("/");
-        printSize(memStatus.ullTotalPhys);
-        print(" ");
-    } else {
-        print("Failed to get system memory info. ");
-    }
-
-    // Get process memory information
-    var procMem = PROCESS_MEMORY_COUNTERS{
-        .cb = @sizeOf(PROCESS_MEMORY_COUNTERS),
-        .PageFaultCount = 0,
-        .PeakWorkingSetSize = 0,
-        .WorkingSetSize = 0,
-        .QuotaPeakPagedPoolUsage = 0,
-        .QuotaPagedPoolUsage = 0,
-        .QuotaPeakNonPagedPoolUsage = 0,
-        .QuotaNonPagedPoolUsage = 0,
-        .PagefileUsage = 0,
-        .PeakPagefileUsage = 0,
-    };
-
-    const process = GetCurrentProcess();
-    if (GetProcessMemoryInfo(process, &procMem, @sizeOf(PROCESS_MEMORY_COUNTERS)) != 0) {
-        print("Process: ");
-        print("Working Set=");
-        printSize(procMem.WorkingSetSize);
-        print(" (Peak=");
-        printSize(procMem.PeakWorkingSetSize);
-        print("), ");
-
-        print("PageFile=");
-        printSize(procMem.PagefileUsage);
-        print(" (Peak=");
-        printSize(procMem.PeakPagefileUsage);
-        print(")");
-    } else {
-        print("Failed to get process memory info");
-    }
-
+    print(method);
+    print(" ");
+    print(path);
     print("\n");
-}
-
-// Print size in human-readable format
-fn printSize(size: usize) void {
-    if (size < 1024) {
-        printInt(@intCast(size));
-        print(" B");
-    } else if (size < 1024 * 1024) {
-        printInt(@intCast(size / 1024));
-        print(" KB");
-    } else if (size < 1024 * 1024 * 1024) {
-        printInt(@intCast(size / (1024 * 1024)));
-        print(" MB");
-    } else {
-        printInt(@intCast(size / (1024 * 1024 * 1024)));
-        print(" GB");
-    }
 }
 
 // Main server function
 pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
-    // Set global verbose flag
     verbose_logging = verbose;
-
-    // Log initial memory usage
-    logMemoryUsage("Server starting");
 
     // Initialize Winsock
     var wsa_data: WSAData = undefined;
@@ -375,66 +243,28 @@ pub fn serve(port: u16, directory: []const u8, verbose: bool) !void {
     print(directory);
     print("\nPress Ctrl+C to stop\n");
 
-    // Debug: Print current working directory
-    var cwd_buf: [260]u8 = undefined;
-    const cwd_len = GetCurrentDirectoryA(cwd_buf.len, &cwd_buf);
-    if (cwd_len > 0) {
-        print("Current working directory: ");
-        print(cwd_buf[0..cwd_len]);
-        print("\n");
-    }
-
-    // Log memory usage after initialization
-    logMemoryUsage("Server initialized");
-
-    // Counter for periodic memory logging
-    var request_counter: u32 = 0;
-    var active_connections: u32 = 0;
-
     // Accept and handle connections
     while (true) {
         const client_socket = accept(server_socket, null, null);
         if (client_socket == INVALID_SOCKET) {
-            print("Accept failed\n");
+            if (verbose_logging) print("Accept failed\n");
             continue;
         }
 
-        // Set socket timeouts to prevent hanging connections
+        // Set socket timeouts
         var timeout = TIMEVAL{
             .tv_sec = 10, // 10 seconds timeout
             .tv_usec = 0,
         };
 
         // Set receive timeout
-        if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL)) == SOCKET_ERROR) {
-            debugPrint("Failed to set SO_RCVTIMEO", intToStr(@intCast(WSAGetLastError())));
-            // Continue anyway
-        }
-
+        _ = setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL));
         // Set send timeout
-        if (setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL)) == SOCKET_ERROR) {
-            debugPrint("Failed to set SO_SNDTIMEO", intToStr(@intCast(WSAGetLastError())));
-            // Continue anyway
-        }
-
-        // Enable TCP_NODELAY to disable Nagle's algorithm
-        if (setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, @ptrCast(&opt_val), @sizeOf(i32)) == SOCKET_ERROR) {
-            debugPrint("Failed to set TCP_NODELAY", intToStr(@intCast(WSAGetLastError())));
-            // Continue anyway
-        }
-
-        // Log memory usage periodically (every 10 requests)
-        request_counter += 1;
-        active_connections += 1;
-        if (request_counter % 10 == 0) {
-            logMemoryUsage("After handling 10 requests");
-            print("Active connections: ");
-            printInt(@intCast(active_connections));
-            print("\n");
-        }
+        _ = setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, @ptrCast(&timeout), @sizeOf(TIMEVAL));
+        // Enable TCP_NODELAY
+        _ = setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, @ptrCast(&opt_val), @sizeOf(i32));
 
         handleConnection(client_socket, directory);
-        active_connections -= 1;
     }
 }
 
@@ -474,10 +304,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         // Ensure socket is properly closed
         _ = shutdown(client_socket, SD_SEND);
         _ = closesocket(client_socket);
-
-        if (verbose_logging) {
-            debugPrint("Connection closed", "Socket resources released");
-        }
     }
 
     var buffer: [4096]u8 = undefined;
@@ -486,18 +312,13 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     if (bytes_received <= 0) {
         if (verbose_logging) {
             if (bytes_received == 0) {
-                debugPrint("Connection closed by client", "");
+                logRequest("Connection closed by client", "");
             } else {
                 const error_code = WSAGetLastError();
-                debugPrint("Receive error code", intToStr(@intCast(error_code)));
+                logRequest("Receive error code", intToStr(@intCast(error_code)));
             }
         }
         return;
-    }
-
-    // Log memory usage for large requests
-    if (bytes_received > 2048 and verbose_logging) {
-        logMemoryUsage("Large request received");
     }
 
     const request = parseRequest(buffer[0..@intCast(bytes_received)]) catch {
@@ -506,10 +327,10 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         return;
     };
 
-    // Debug: Print request details
-    debugPrint("Request method", request.method);
-    debugPrint("Request path", request.path);
-    debugPrint("Request version", request.version);
+    // Log request info
+    if (verbose_logging) {
+        logRequest(request.method, request.path);
+    }
 
     // Flag to determine if we should send the body (true for GET, false for HEAD)
     const send_body = eql(request.method, "GET");
@@ -525,7 +346,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     var path_len: usize = 0;
 
     // Start with the directory
-    debugPrint("Directory parameter", directory);
+    logRequest("Directory parameter", directory);
     for (directory) |c| {
         path_buf[path_len] = c;
         path_len += 1;
@@ -552,12 +373,12 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         }
     }
 
-    debugPrint("Request path (normalized)", req_path);
+    logRequest("Request path (normalized)", req_path);
 
     // If path is empty, serve index.html
     if (req_path.len == 0) {
         const index = "index.html";
-        debugPrint("Using default file", index);
+        logRequest("Using default file", index);
         for (index) |c| {
             path_buf[path_len] = c;
             path_len += 1;
@@ -579,25 +400,25 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     path_buf[path_len] = 0;
 
     // Debug: Print full file path
-    debugPrint("Full file path", path_buf[0..path_len]);
+    logRequest("Full file path", path_buf[0..path_len]);
 
     // Log memory before file operations
     if (verbose_logging) {
-        logMemoryUsage("Before file operations");
+        logRequest("Before file operations", "");
     }
 
     // Check if file exists before trying to open it
     const file_attrs = GetFileAttributesA(@ptrCast(&path_buf));
     if (file_attrs == 0xFFFFFFFF) { // INVALID_FILE_ATTRIBUTES
         const error_code = GetLastError();
-        debugPrint("File not found, error code", intToStr(error_code));
+        logRequest("File not found, error code", intToStr(error_code));
         sendErrorResponse(client_socket, 404, "Not Found", send_body);
         return;
     }
 
     // Check if it's a directory
     if ((file_attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-        debugPrint("Path is a directory", path_buf[0..path_len]);
+        logRequest("Path is a directory", path_buf[0..path_len]);
 
         // Check if the request path ends with a slash
         const should_redirect = req_path.len > 0 and req_path[req_path.len - 1] != '/';
@@ -693,14 +514,14 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         const index_attrs = GetFileAttributesA(@ptrCast(&index_path_buf));
         if (index_attrs != 0xFFFFFFFF and (index_attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
             // Index file exists, serve it
-            debugPrint("Serving index file", index_path_buf[0..index_path_len]);
+            logRequest("Serving index file", index_path_buf[0..index_path_len]);
 
             // Open the index file
             const file_handle = CreateFileA(@ptrCast(&index_path_buf), GENERIC_READ, FILE_SHARE_READ, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, null);
 
             if (file_handle == INVALID_HANDLE_VALUE) {
                 const error_code = GetLastError();
-                debugPrint("Failed to open index file, error code", intToStr(error_code));
+                logRequest("Failed to open index file, error code", intToStr(error_code));
                 sendErrorResponse(client_socket, 500, "Internal Server Error", send_body);
                 return;
             }
@@ -715,7 +536,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
             // Log memory usage for large files
             if (file_size > 1024 * 1024 and verbose_logging) { // Log for files > 1MB
-                logMemoryUsage("Before sending large index file");
+                logRequest("Before sending large index file", "");
             }
 
             // Determine MIME type
@@ -805,22 +626,22 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             header_len += 1;
 
             // Send headers
-            debugPrint("Sending HTTP headers for index file", header_buf[0..header_len]);
+            logRequest("Sending HTTP headers for index file", header_buf[0..header_len]);
             _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
             // Send file content
             if (!sendFileContent(client_socket, file_handle, file_size, send_body)) {
-                debugPrint("Failed to send index file content", "");
+                logRequest("Failed to send index file content", "");
                 return;
             }
 
             // Log memory usage after sending large files
             if (file_size > 1024 * 1024 and verbose_logging) {
-                logMemoryUsage("After sending large index file");
+                logRequest("After sending large index file", "");
             }
 
             // Close the connection
-            debugPrint("Closing connection after serving index file", "");
+            logRequest("Closing connection after serving index file", "");
             _ = shutdown(client_socket, SD_SEND);
             return;
         } else {
@@ -835,13 +656,13 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     if (file_handle == INVALID_HANDLE_VALUE) {
         const error_code = GetLastError();
-        debugPrint("Failed to open file, error code", intToStr(error_code));
+        logRequest("Failed to open file, error code", intToStr(error_code));
         sendErrorResponse(client_socket, 404, "Not Found", send_body);
         return;
     }
     defer _ = CloseHandle(file_handle);
 
-    debugPrint("File opened successfully", "");
+    logRequest("File opened successfully", "");
 
     // Get file size
     const file_size = GetFileSize(file_handle, null);
@@ -852,7 +673,7 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     // Log memory usage for large files
     if (file_size > 1024 * 1024 and verbose_logging) { // Log for files > 1MB
-        logMemoryUsage("Before sending large file");
+        logRequest("Before sending large file", "");
     }
 
     // Determine MIME type
@@ -942,27 +763,27 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     header_len += 1;
 
     // Send headers
-    debugPrint("Sending HTTP headers", header_buf[0..header_len]);
+    logRequest("Sending HTTP headers", header_buf[0..header_len]);
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
     // Send file content
     if (!sendFileContent(client_socket, file_handle, file_size, send_body)) {
-        debugPrint("Failed to send file content", "");
+        logRequest("Failed to send file content", "");
         return;
     }
 
     // Log memory usage after sending large files
     if (file_size > 1024 * 1024 and verbose_logging) {
-        logMemoryUsage("After sending large file");
+        logRequest("After sending large file", "");
     }
 
     // Close the connection
-    debugPrint("Closing connection", "");
+    logRequest("Closing connection", "");
     _ = shutdown(client_socket, SD_SEND);
 }
 
 fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []const u8, send_body: bool) void {
-    debugPrint("Sending error response", intToStr(status_code));
+    logRequest("Sending error response", intToStr(status_code));
 
     var response_buf: [1024]u8 = undefined;
     var response_len: usize = 0;
@@ -1113,17 +934,17 @@ fn sendErrorResponse(client_socket: usize, status_code: u32, status_text: []cons
     response_len += 1;
 
     // Send headers
-    debugPrint("Sending error headers", response_buf[0..response_len]);
+    logRequest("Sending error headers", response_buf[0..response_len]);
     _ = send(client_socket, &response_buf, @intCast(response_len), 0);
 
     // Send body only for GET requests
     if (send_body) {
-        debugPrint("Sending error body", body_buf[0..body_len]);
+        logRequest("Sending error body", body_buf[0..body_len]);
         _ = send(client_socket, &body_buf, @intCast(body_len), 0);
     }
 
     // Close the connection
-    debugPrint("Closing connection after error", "");
+    logRequest("Closing connection after error", "");
     _ = shutdown(client_socket, SD_SEND);
 }
 
@@ -1158,10 +979,6 @@ fn intToStr(value: u32) []u8 {
     return buffer[0..i];
 }
 
-// Add GetCurrentDirectoryA function declaration
-extern "kernel32" fn GetCurrentDirectoryA(nBufferLength: u32, lpBuffer: [*]u8) callconv(.C) u32;
-extern "kernel32" fn GetFileAttributesA(lpFileName: [*:0]const u8) callconv(.C) u32;
-
 // Directory listing functions
 extern "kernel32" fn FindFirstFileA(lpFileName: [*:0]const u8, lpFindFileData: *WIN32_FIND_DATA) callconv(.C) usize;
 extern "kernel32" fn FindNextFileA(hFindFile: usize, lpFindFileData: *WIN32_FIND_DATA) callconv(.C) i32;
@@ -1191,14 +1008,7 @@ const FILETIME = extern struct {
 
 // List directory contents and generate HTML
 fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u8, send_body: bool) void {
-    print("Listing directory: ");
-    print(path);
-    print("\n");
-
-    // Log memory usage before directory listing
-    if (verbose_logging) {
-        logMemoryUsage("Before directory listing");
-    }
+    logRequest("Listing directory", path);
 
     // Create search pattern (path\*)
     var search_pattern: [512]u8 = undefined;
@@ -1235,10 +1045,9 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
         // HTML header
         const html_header =
             "<!DOCTYPE HTML>\n" ++
-            "<html lang=\"en\">\n" ++
+            "<html>\n" ++
             "<head>\n" ++
-            "    <meta charset=\"utf-8\">\n" ++
-            "    <title>Directory listing for ";
+            "<title>Directory listing for ";
 
         for (html_header) |c| {
             html_buf[html_len] = c;
@@ -1254,17 +1063,9 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
         // Continue with HTML
         const html_header2 =
             "</title>\n" ++
-            "    <style>\n" ++
-            "        body { font-family: Arial, sans-serif; margin: 20px; }\n" ++
-            "        h1 { border-bottom: 1px solid #ccc; padding-bottom: 10px; }\n" ++
-            "        ul { list-style-type: none; padding: 0; }\n" ++
-            "        li { margin: 5px 0; }\n" ++
-            "        a { text-decoration: none; color: #0366d6; }\n" ++
-            "        a:hover { text-decoration: underline; }\n" ++
-            "    </style>\n" ++
             "</head>\n" ++
             "<body>\n" ++
-            "    <h1>Directory listing for ";
+            "<h1>Directory listing for ";
 
         for (html_header2) |c| {
             html_buf[html_len] = c;
@@ -1278,11 +1079,7 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
         }
 
         // Start the file list
-        const html_list_start =
-            "</h1>\n" ++
-            "    <hr>\n" ++
-            "    <ul>\n";
-
+        const html_list_start = "</h1>\n<hr>\n<ul>\n";
         for (html_list_start) |c| {
             html_buf[html_len] = c;
             html_len += 1;
@@ -1290,7 +1087,7 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
 
         // Add parent directory link if not at root
         if (request_path.len > 1) {
-            const parent_link = "        <li><a href=\"..\">..</a> (Parent Directory)</li>\n";
+            const parent_link = "<li><a href=\"..\">..</a></li>\n";
             for (parent_link) |c| {
                 html_buf[html_len] = c;
                 html_len += 1;
@@ -1312,42 +1109,11 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
             // Skip . and .. entries
             if (!eql(filename, ".") and !eql(filename, "..")) {
                 // Start list item
-                html_buf[html_len] = ' ';
-                html_len += 1;
-                html_buf[html_len] = ' ';
-                html_len += 1;
-                html_buf[html_len] = ' ';
-                html_len += 1;
-                html_buf[html_len] = ' ';
-                html_len += 1;
-                html_buf[html_len] = ' ';
-                html_len += 1;
-                html_buf[html_len] = '<';
-                html_len += 1;
-                html_buf[html_len] = 'l';
-                html_len += 1;
-                html_buf[html_len] = 'i';
-                html_len += 1;
-                html_buf[html_len] = '>';
-                html_len += 1;
-                html_buf[html_len] = '<';
-                html_len += 1;
-                html_buf[html_len] = 'a';
-                html_len += 1;
-                html_buf[html_len] = ' ';
-                html_len += 1;
-                html_buf[html_len] = 'h';
-                html_len += 1;
-                html_buf[html_len] = 'r';
-                html_len += 1;
-                html_buf[html_len] = 'e';
-                html_len += 1;
-                html_buf[html_len] = 'f';
-                html_len += 1;
-                html_buf[html_len] = '=';
-                html_len += 1;
-                html_buf[html_len] = '"';
-                html_len += 1;
+                const li_start = "<li><a href=\"";
+                for (li_start) |c| {
+                    html_buf[html_len] = c;
+                    html_len += 1;
+                }
 
                 // Add the filename as the link
                 for (filename) |c| {
@@ -1386,11 +1152,6 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
                 }
 
                 file_count += 1;
-
-                // Log memory usage periodically for large directories
-                if (file_count % 100 == 0 and verbose_logging) {
-                    logMemoryUsage("During directory listing (files processed)");
-                }
             }
 
             // Find next file
@@ -1399,16 +1160,10 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
             }
         }
 
-        // Log memory usage after processing all files
-        if (file_count > 100 and verbose_logging) {
-            logMemoryUsage("After processing directory with many files");
-        }
-
         // Close the HTML
         const html_footer =
-            "    </ul>\n" ++
-            "    <hr>\n" ++
-            "    <p>http-zerver</p>\n" ++
+            "</ul>\n" ++
+            "<hr>\n" ++
             "</body>\n" ++
             "</html>\n";
 
@@ -1442,7 +1197,7 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
 
         // Estimate HTML size based on file count
         // This is a rough estimate for HEAD requests
-        html_len = 1000 + (file_count * 100);
+        html_len = 500 + (file_count * 50); // Reduced size estimate due to simpler HTML
     }
 
     // Send HTTP headers
@@ -1457,7 +1212,7 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
     }
 
     // Content-Type
-    const content_type = "Content-Type: text/html; charset=utf-8\r\n";
+    const content_type = "Content-Type: text/html\r\n";
     for (content_type) |c| {
         header_buf[header_len] = c;
         header_len += 1;
@@ -1521,22 +1276,17 @@ fn listDirectory(client_socket: usize, path: []const u8, request_path: []const u
     header_len += 1;
 
     // Send headers
-    print("Sending directory listing headers\n");
+    logRequest("Sending directory listing headers", header_buf[0..header_len]);
     _ = send(client_socket, &header_buf, @intCast(header_len), 0);
 
     // Send HTML content only for GET requests
     if (send_body) {
-        print("Sending directory listing HTML\n");
+        logRequest("Sending directory listing HTML", "");
         _ = send(client_socket, &html_buf, @intCast(html_len), 0);
     }
 
-    // Log memory usage after sending directory listing
-    if (verbose_logging) {
-        logMemoryUsage("After sending directory listing");
-    }
-
     // Close the connection
-    print("Closing connection after directory listing\n");
+    logRequest("Closing connection after directory listing", "");
     _ = shutdown(client_socket, SD_SEND);
 }
 
@@ -1553,14 +1303,14 @@ fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32, sen
     var send_result: i32 = 0;
 
     while (ReadFile(file_handle, &read_buf, read_buf.len, &bytes_read, null) != 0 and bytes_read > 0) {
-        debugPrint("Reading file content bytes", intToStr(bytes_read));
+        logRequest("Reading file content bytes", intToStr(bytes_read));
 
         // Send the data with error handling
         send_result = send(client_socket, &read_buf, @intCast(bytes_read), 0);
 
         if (send_result == SOCKET_ERROR) {
             const error_code = WSAGetLastError();
-            debugPrint("Send error code", intToStr(@intCast(error_code)));
+            logRequest("Send error code", intToStr(@intCast(error_code)));
             return false;
         }
 
@@ -1568,14 +1318,14 @@ fn sendFileContent(client_socket: usize, file_handle: usize, file_size: u32, sen
 
         // Log memory usage periodically during large file transfers
         if (file_size > 1024 * 1024 and total_bytes_sent % (1024 * 1024) < bytes_read and verbose_logging) {
-            logMemoryUsage("During file transfer");
+            logRequest("During file transfer", "");
         }
     }
 
     // Check if we sent all the data
     if (total_bytes_sent != file_size) {
-        debugPrint("Warning: Sent bytes", intToStr(total_bytes_sent));
-        debugPrint("Expected file size", intToStr(file_size));
+        logRequest("Warning: Sent bytes", intToStr(total_bytes_sent));
+        logRequest("Expected file size", intToStr(file_size));
     }
 
     return true;
