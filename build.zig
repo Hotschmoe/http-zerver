@@ -5,6 +5,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Generate version date file
+    const gen_date_cmd = b.addSystemCommand(&[_][]const u8{
+        "powershell",
+        "-Command",
+        "(Get-Date -Format 'yyyy-MM-dd').ToString() | Out-File -FilePath src/version_date.txt -NoNewline -Encoding ASCII",
+    });
+
     // Create executable
     const exe = b.addExecutable(.{
         .name = "http-zerver",
@@ -12,6 +19,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Make exe depend on date generation
+    exe.step.dependOn(&gen_date_cmd.step);
 
     // Link with required Windows libraries
     if (target.result.os.tag == .windows) {

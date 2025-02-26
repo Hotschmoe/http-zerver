@@ -1,6 +1,8 @@
 // http-zerver: A minimal HTTP server for Windows without std
 // Serves static files from a local directory
 
+const version = @import("version.zig");
+
 // Global configuration
 var verbose_logging: bool = false;
 

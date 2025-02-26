@@ -2,6 +2,7 @@
 // Handles command-line arguments and starts the HTTP server
 
 const http = @import("http.zig");
+const version = @import("version.zig");
 
 // External functions for command-line arguments
 extern "kernel32" fn GetCommandLineA() callconv(.C) [*:0]const u8;
@@ -112,7 +113,8 @@ pub fn main() !void {
     const args = parseArgs();
 
     print("http-zerver: Starting HTTP server\n");
-    print("Port: ");
+    print(version.getVersionString());
+    print("\nPort: ");
     printInt(args.port);
     print("\nDirectory: ");
     print(args.directory);
