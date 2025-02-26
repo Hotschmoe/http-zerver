@@ -114,9 +114,9 @@ pub fn main() !void {
 
     print("http-zerver: Starting HTTP server\n");
     print(version.getVersionString());
-    print("\nPort: ");
+    print("\nListening at http://localhost:");
     printInt(args.port);
-    print("\nDirectory: ");
+    print("\nServing directory: ");
     print(args.directory);
     if (args.verbose) {
         print("\nVerbose logging: enabled");
