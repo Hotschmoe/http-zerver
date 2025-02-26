@@ -330,7 +330,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
     var path_len: usize = 0;
 
     // Start with the directory
-    logRequest("Directory parameter", directory);
     for (directory) |c| {
         path_buf[path_len] = c;
         path_len += 1;
@@ -356,8 +355,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             break;
         }
     }
-
-    logRequest("Request path (normalized)", req_path);
 
     // If path is empty, serve index.html
     if (req_path.len == 0) {
@@ -396,15 +393,10 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
 
     // Check if it's a directory
     if ((file_attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-        logRequest("Path is a directory", path_buf[0..path_len]);
-
         // Check if the request path ends with a slash
         const should_redirect = req_path.len > 0 and req_path[req_path.len - 1] != '/';
 
         if (should_redirect) {
-            // Redirect to add trailing slash
-            print("Redirecting to add trailing slash\n");
-
             var redirect_buf: [1024]u8 = undefined;
             var redirect_len: usize = 0;
 
@@ -510,11 +502,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
             if (file_size == 0xFFFFFFFF) { // INVALID_FILE_SIZE
                 sendErrorResponse(client_socket, 500, "Internal Server Error", send_body);
                 return;
-            }
-
-            // Log memory usage for large files
-            if (file_size > 1024 * 1024 and verbose_logging) { // Log for files > 1MB
-                logRequest("Before sending large index file", "");
             }
 
             // Determine MIME type
@@ -647,11 +634,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         return;
     }
 
-    // Log memory usage for large files
-    if (file_size > 1024 * 1024 and verbose_logging) { // Log for files > 1MB
-        logRequest("Before sending large file", "");
-    }
-
     // Determine MIME type
     const mime_type = getMimeType(path_buf[0..path_len]);
 
@@ -748,13 +730,6 @@ fn handleConnection(client_socket: usize, directory: []const u8) void {
         return;
     }
 
-    // Log memory usage after sending large files
-    if (file_size > 1024 * 1024 and verbose_logging) {
-        logRequest("After sending large file", "");
-    }
-
-    // Close the connection
-    logRequest("Closing connection", "");
     _ = shutdown(client_socket, SD_SEND);
 }
 
